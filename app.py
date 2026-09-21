@@ -4,7 +4,6 @@ from PIL import Image
 from google import genai
 import gspread
 
-# Page Config
 st.set_page_config(page_title="Pharmacy Ledger Inserter", page_icon="📝", layout="centered")
 
 st.title("📝 Pharmacy Ledger Inserter")
@@ -17,7 +16,7 @@ try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 except Exception as e:
-    st.error("Error loading GEMINI_API_KEY from secrets. Please check Advanced Settings.")
+    st.error("Error loading GEMINI_API_KEY from secrets.")
     st.stop()
 
 try:
@@ -45,9 +44,6 @@ if uploaded_file is not None:
     if st.button("Process Ledger Page", type="primary"):
         with st.spinner("Extracting handwritten ledger data via Gemini..."):
             
-            # ---------------------------------------------------------
-            # 3. GENERALIZED GEMINI PROMPT
-            # ---------------------------------------------------------
             prompt = f"""
             Analyze this pharmacy ledger image containing handwritten daily entries.
             {date_context_str}
@@ -83,7 +79,13 @@ if uploaded_file is not None:
             8. Return strict, valid JSON format only without markdown formatting code blocks.
             """
 
-            MODEL_FALLBACKS = ["gemini-3.6-flash", "gemini-flash", "gemini-3-flash"]
+            # Explicit list using gemini-3.6-flash as primary
+            MODEL_FALLBACKS = [
+                "gemini-3.6-flash",
+                "gemini-3.5-flash",
+                "gemini-2.5-flash"
+            ]
+            
             response = None
             last_exception = None
 
@@ -128,12 +130,11 @@ if uploaded_file is not None:
             # ---------------------------------------------------------
             if extracted_data:
                 try:
-                    # Make sure this title matches your Google Sheet exactly
                     sh = gc.open("Pharmacy_Ledger_Workbook") 
                     worksheet = sh.sheet1
 
                     for entry in extracted_data:
-                        date_val = entry.get("date", "")
+                        date_val = str(entry.get("date", ""))
                         
                         drugs_gross = 0
                         drugs_direct = 0
@@ -142,25 +143,29 @@ if uploaded_file is not None:
                         
                         for item in entry.get("sales", []):
                             cat = str(item.get("category", "")).lower()
+                            gross = item.get("gross_sale") or 0
+                            direct = item.get("direct_expense") or 0
+                            
                             if "drug" in cat:
-                                drugs_gross = item.get("gross_sale", 0)
-                                drugs_direct = item.get("direct_expense", 0)
+                                drugs_gross = int(gross)
+                                drugs_direct = int(direct)
                             elif "cos" in cat:
-                                cosmetics_gross = item.get("gross_sale", 0)
-                                cosmetics_direct = item.get("direct_expense", 0)
+                                cosmetics_gross = int(gross)
+                                cosmetics_direct = int(direct)
 
-                        net_sale = entry.get("net_sale", 0)
+                        net_sale = int(entry.get("net_sale") or 0)
 
-                        overhead_map = {
-                            str(exp.get("expense_name", "")).strip(): exp.get("price", 0) 
-                            for exp in entry.get("overhead_expenses", [])
-                        }
+                        overhead_map = {}
+                        for exp in entry.get("overhead_expenses", []):
+                            name = str(exp.get("expense_name", "")).strip().lower()
+                            price = exp.get("price") or 0
+                            overhead_map[name] = int(price)
                         
-                        rent = overhead_map.get("Rent", 0)
-                        allowance = overhead_map.get("Allow", overhead_map.get("Allowance", 0))
-                        airtime = overhead_map.get("Airtime", 0)
-                        total_overhead = entry.get("total_overhead_expense", 0)
-                        logged_by = entry.get("logged_by", "")
+                        rent = overhead_map.get("rent", 0)
+                        allowance = overhead_map.get("allow", overhead_map.get("allowance", 0))
+                        airtime = overhead_map.get("airtime", 0)
+                        total_overhead = int(entry.get("total_overhead_expense") or 0)
+                        logged_by = str(entry.get("logged_by", ""))
 
                         row_data = [
                             date_val, 
@@ -169,7 +174,7 @@ if uploaded_file is not None:
                             net_sale, rent, allowance, airtime, total_overhead, logged_by
                         ]
 
-                        worksheet.append_row(row_data)
+                        worksheet.append_row(row_data, value_input_option="USER_ENTERED")
 
                     st.success("Successfully appended ledger entry to Google Sheets!")
 
