@@ -125,12 +125,12 @@ if uploaded_file is not None:
                 st.error(f"An error occurred during extraction parsing: {str(e)}")
                 st.stop()
 
-           # ---------------------------------------------------------
-            # 4. GOOGLE SHEETS INSERTION LOGIC
+# ---------------------------------------------------------
+            # 4. GOOGLE SHEETS INSERTION LOGIC (MULTI-ROW LAYOUT)
             # ---------------------------------------------------------
             if extracted_data:
                 try:
-                    # Open by exact sheet title "daily records"
+                    # Open exact sheet name "Daily Records"
                     sh = gc.open("Daily Records") 
                     worksheet = sh.sheet1
 
@@ -138,80 +138,93 @@ if uploaded_file is not None:
 
                     for entry in extracted_data:
                         date_val = str(entry.get("date") or "")
+                        logged_by = str(entry.get("logged_by") or "")
                         
-                        drugs_gross = 0
-                        drugs_direct = 0
-                        cosmetics_gross = 0
-                        cosmetics_direct = 0
-                        
-                        sales_list = entry.get("sales") if isinstance(entry.get("sales"), list) else []
-                        for item in sales_list:
-                            if not isinstance(item, dict):
-                                continue
-                            cat = str(item.get("category") or "").lower()
-                            gross_val = item.get("gross_sale") or 0
-                            direct_val = item.get("direct_expense") or 0
-                            
-                            try:
-                                gross_clean = int(float(gross_val))
-                            except (ValueError, TypeError):
-                                gross_clean = 0
-
-                            try:
-                                direct_clean = int(float(direct_val))
-                            except (ValueError, TypeError):
-                                direct_clean = 0
-                            
-                            if "drug" in cat:
-                                drugs_gross = gross_clean
-                                drugs_direct = direct_clean
-                            elif "cos" in cat:
-                                cosmetics_gross = gross_clean
-                                cosmetics_direct = direct_clean
-
                         try:
                             net_sale = int(float(entry.get("net_sale") or 0))
                         except (ValueError, TypeError):
                             net_sale = 0
 
-                        overhead_map = {}
-                        overhead_list = entry.get("overhead_expenses") if isinstance(entry.get("overhead_expenses"), list) else []
-                        for exp in overhead_list:
-                            if not isinstance(exp, dict):
+                        # Extract Sales Categories (Drugs, Cosmetics)
+                        sales_list = entry.get("sales") if isinstance(entry.get("sales"), list) else []
+                        drugs_item = {}
+                        cosmetics_item = {}
+                        
+                        for item in sales_list:
+                            if not isinstance(item, dict):
                                 continue
-                            name = str(exp.get("expense_name") or "").strip().lower()
-                            p_val = exp.get("price") or 0
+                            cat = str(item.get("category") or "").lower()
+                            if "drug" in cat:
+                                drugs_item = item
+                            elif "cos" in cat:
+                                cosmetics_item = item
+
+                        def clean_num(val):
                             try:
-                                price_clean = int(float(p_val))
+                                return int(float(val))
                             except (ValueError, TypeError):
-                                price_clean = 0
-                            overhead_map[name] = price_clean
-                        
-                        rent = int(overhead_map.get("rent", 0))
-                        allowance = int(overhead_map.get("allow", overhead_map.get("allowance", 0)))
-                        airtime = int(overhead_map.get("airtime", 0))
-                        
-                        try:
-                            total_overhead = int(float(entry.get("total_overhead_expense") or 0))
-                        except (ValueError, TypeError):
-                            total_overhead = 0
+                                return ""
 
-                        logged_by = str(entry.get("logged_by") or "")
+                        # Extract Overhead Expenses list
+                        overhead_list = entry.get("overhead_expenses") if isinstance(entry.get("overhead_expenses"), list) else []
+                        
+                        # Calculate maximum vertical rows needed for this entry (at least 2 for Drugs + Cosmetics)
+                        total_sub_rows = max(2, len(overhead_list))
 
-                        clean_row = [
-                            date_val, 
-                            "Drugs", drugs_gross, drugs_direct,
-                            "Cosmetics", cosmetics_gross, cosmetics_direct,
-                            net_sale, rent, allowance, airtime, total_overhead, logged_by
-                        ]
-                        rows_to_append.append(clean_row)
+                        for i in range(total_sub_rows):
+                            # Col 1: Date (Only on Row 1)
+                            c_date = date_val if i == 0 else ""
+                            
+                            # Cols 2-5: Sales Data
+                            if i == 0:
+                                c_cat = "Drugs"
+                                c_gross = clean_num(drugs_item.get("gross_sale"))
+                                c_cash = clean_num(drugs_item.get("cash_sale") or drugs_item.get("gross_sale"))
+                                c_exp = clean_num(drugs_item.get("direct_expense"))
+                            elif i == 1:
+                                c_cat = "Cosmetics"
+                                c_gross = clean_num(cosmetics_item.get("gross_sale"))
+                                c_cash = clean_num(cosmetics_item.get("cash_sale") or cosmetics_item.get("gross_sale"))
+                                c_exp = clean_num(cosmetics_item.get("direct_expense"))
+                            else:
+                                c_cat = ""
+                                c_gross = ""
+                                c_cash = ""
+                                c_exp = ""
+
+                            # Cols 6-7: Overhead Expense Name & Price
+                            if i < len(overhead_list) and isinstance(overhead_list[i], dict):
+                                c_exp_name = str(overhead_list[i].get("expense_name") or "").strip().title()
+                                c_exp_price = clean_num(overhead_list[i].get("price"))
+                            else:
+                                c_exp_name = ""
+                                c_exp_price = ""
+
+                            # Col 8: Net Sale (Only on Row 1)
+                            c_netsale = net_sale if i == 0 else ""
+
+                            # Col 9: Logged By (Only on Row 1)
+                            c_logged = logged_by if i == 0 else ""
+
+                            sub_row = [
+                                c_date,
+                                c_cat,
+                                c_gross,
+                                c_cash,
+                                c_exp,
+                                c_exp_name,
+                                c_exp_price,
+                                c_netsale,
+                                c_logged
+                            ]
+                            rows_to_append.append(sub_row)
 
                     if rows_to_append:
                         worksheet.append_rows(rows_to_append, value_input_option="USER_ENTERED")
-                        st.success("Successfully appended ledger entry to Google Sheets!")
+                        st.success("Successfully appended multi-row ledger entry to Daily Records!")
 
                 except gspread.exceptions.SpreadsheetNotFound:
-                    st.error("Spreadsheet 'Daily Records' not found! Double-check that 'Daily Records' is shared with your service account email as an Editor.")
+                    st.error("Spreadsheet 'Daily Records' not found! Double check exact casing and service account access.")
                 except Exception as sheet_err:
                     if hasattr(sheet_err, "response"):
                         st.error(f"Google Sheets API Error ({sheet_err.response.status_code}): {sheet_err.response.text}")
