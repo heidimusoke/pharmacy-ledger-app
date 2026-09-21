@@ -108,7 +108,7 @@ if uploaded_file is not None:
 
                 [
                   {{
-                    "date": "M/D/YYYY",
+                    "date": "D/M/YYYY",
                     "sales": [
                       {{"category": "Drugs", "gross_sale": 416700, "cash_sale": 411100, "direct_expense": 5600}},
                       {{"category": "Cosmetics", "gross_sale": 33500, "cash_sale": 33500, "direct_expense": 0}}
@@ -124,7 +124,7 @@ if uploaded_file is not None:
                 ]
 
                 EXTRACTION & DATE RULES:
-                1. "date": Read handwritten date headers clearly (e.g., 11/8/2026).
+                1. "date": Read handwritten date headers and format strictly as D/M/YYYY (Day/Month/Year, e.g., 8/11/2026 for 8th November 2026 or 11/8/2026 for 11th August 2026 depending on the log).
                 2. Output strict valid JSON array only with no markdown wrapping.
                 """
 
