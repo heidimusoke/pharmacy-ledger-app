@@ -1,206 +1,120 @@
 import json
-import time
-from google import genai
-from google.genai import types
-import gspread
-from PIL import Image, ImageOps
 import streamlit as st
+from PIL import Image
+from google import genai
+import gspread
 
-# Page Configuration
-st.set_page_config(
-    page_title="Pharmacy Ledger Inserter", page_icon="📑", layout="centered"
-)
+# Page Config
+st.set_page_config(page_title="Pharmacy Ledger Inserter", page_icon="📝", layout="centered")
 
-st.title("📑 Pharmacy Ledger Inserter")
+st.title("📝 Pharmacy Ledger Inserter")
 st.write("Upload or capture a photo of the daily logbook page.")
 
-# Fetch Gemini API Key from Streamlit Secrets (or fallback for local testing)
-# Fetch Gemini API Key from Streamlit Secrets
-GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-client = genai.Client(api_key=GEMINI_API_KEY)
+# ---------------------------------------------------------
+# 1. AUTHENTICATION & SECRETS
+# ---------------------------------------------------------
+# Fetch Gemini API Key securely from Streamlit secrets
+try:
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+except Exception as e:
+    st.error("Error loading GEMINI_API_KEY from secrets. Please check Advanced Settings.")
+    st.stop()
 
+# Connect to Google Sheets via Service Account Secrets
+try:
+    gcp_credentials = dict(st.secrets["gcp_service_account"])
+    gc = gspread.service_account_from_dict(gcp_credentials)
+except Exception as e:
+    st.error("Error initializing Google Sheets service account from secrets.")
+    st.stop()
 
-
-def get_google_sheet():
-  """Connects to Google Sheets using credentials stored in Streamlit Secrets."""
-  if "gcp_service_account" in st.secrets:
-    # Production: Load JSON object directly from Streamlit Cloud Secrets
-    creds_dict = dict(st.secrets["gcp_service_account"])
-    gc = gspread.service_account_from_dict(creds_dict)
-  else:
-    # Local fallback: Load local file
-    gc = gspread.service_account(filename="credentials.json")
-  return gc.open("Daily Records").sheet1
-
-
-def get_last_sheet_date(sheet):
-  """Reads Column A of the Google Sheet to find the last recorded date entry."""
-  try:
-    dates = sheet.col_values(1)
-    for val in reversed(dates):
-      val_clean = val.strip()
-      if val_clean and val_clean.lower() != "date":
-        return val_clean
-  except Exception:
-    pass
-  return None
-
-
-def get_working_models():
-  """Dynamically discovers active Gemini models for your API key."""
-  try:
-    available_models = []
-    for m in client.models.list():
-      supported_methods = getattr(m, "supported_generation_methods", []) or []
-      if "generateContent" in supported_methods or not supported_methods:
-        available_models.append(m.name.replace("models/", ""))
-    flash_models = [m for m in available_models if "flash" in m.lower()]
-    other_models = [m for m in available_models if "flash" not in m.lower()]
-    return flash_models + other_models
-  except Exception:
-    return ["gemini-2.5-flash", "gemini-2.0-flash"]
-
-
-def preprocess_image(pil_img):
-  """Corrects EXIF orientation and auto-rotates portrait images 90 degrees."""
-  img = ImageOps.exif_transpose(pil_img)
-  width, height = img.size
-  if height > width:
-    img = img.rotate(270, expand=True)
-  return img
-
-
-# Mobile File/Camera Uploader
+# ---------------------------------------------------------
+# 2. IMAGE INPUT
+# ---------------------------------------------------------
 uploaded_file = st.file_uploader(
-    "Select ledger photo from Gallery or Camera",
-    type=["jpg", "jpeg", "png"],
+    "Select ledger photo from Gallery or Camera", 
+    type=["jpg", "jpeg", "png"]
 )
 
 if uploaded_file is not None:
-  raw_image = Image.open(uploaded_file)
-  st.image(raw_image, caption="Uploaded Image", use_container_width=True)
+    raw_image = Image.open(uploaded_file)
+    st.image(raw_image, caption="Uploaded Image", use_container_width=True) #[cite: 4]
+    
+    # Optional date context to aid extraction
+    date_context = st.text_input("Date Context (optional, e.g. Aug 2026):", "")
+    date_context_str = f"Context date hint: {date_context}" if date_context else ""
 
-  if st.button("🚀 Process & Append to Google Sheets", type="primary"):
-    with st.spinner("Analyzing handwritten ledger entries..."):
-      try:
-        ledger_img = preprocess_image(raw_image)
-        sheet = get_google_sheet()
-        last_date = get_last_sheet_date(sheet)
+    if st.button("Process Ledger Page", type="primary"):
+        with st.spinner("Extracting handwritten ledger data via Gemini..."):
+            
+            # ---------------------------------------------------------
+            # 3. GENERALIZED GEMINI PROMPT
+            # ---------------------------------------------------------
+            prompt = f"""
+            Analyze this pharmacy ledger image containing handwritten daily entries.
+            {date_context_str}
 
-        date_context_str = (
-            f"The last date recorded in the spreadsheet prior to this page was:"
-            f" {last_date}."
-            if last_date
-            else "No previous dates found in sheet."
-        )
+            Extract EVERY daily entry shown in the image and return ONLY a valid JSON array matching this generic schema:
 
-        prompt = f"""
-                Analyze this pharmacy ledger image containing handwritten entries across multiple dates.
-                {date_context_str}
+            [
+              {{
+                "date": "M/D/YYYY",
+                "sales": [
+                  {{"category": "Category Name", "gross_sale": 0, "direct_expense": 0}}
+                ],
+                "net_sale": 0,
+                "overhead_expenses": [
+                  {{"expense_name": "Expense Name", "price": 0}}
+                ],
+                "total_overhead_expense": 0,
+                "logged_by": "Name or Initials"
+              }}
+            ]
 
-                Extract EVERY daily entry shown in the image and return ONLY a valid JSON array matching this schema:
+            EXTRACTION & SPATIAL ALIGNMENT RULES:
+            1. "date": Read the date header at the top-left of the entry.
+            2. "sales": Map each category row explicitly horizontally (Category -> Gross -> Direct Expense):
+               - Column 1: Category Name (e.g., Drugs, Cosmetics).
+               - Column 2: Gross Sale for that specific category.
+               - Column 3: Direct Expense on that SAME category line. Do NOT shift a category's gross sale into another row's direct expense.
+            3. "net_sale": Extract the net sales calculation total.
+            4. "overhead_expenses": Extract all operational expenses (e.g., Rent, Allowance, Airtime) line-by-line with their respective costs.
+            5. "total_overhead_expense": Extract the grand total at the bottom of the overhead section.
+            6. "logged_by": Extract any signature, name, or initials written at the bottom.
+            7. Extract pure numbers for all monetary amounts (strip commas, spaces, or currency markers).
+            8. Return strict, valid JSON format only without markdown formatting code blocks.
+            """
 
-                [
-                  {{
-                    "date": "M/D/YYYY",
-                    "sales": [
-                      {{"category": "Drugs", "gross_sale": 0, "direct_expense": 0}},
-                      {{"category": "Cosmetics", "gross_sale": 0, "direct_expense": 0}}
-                    ],
-                    "net_sale": 0,
-                    "overhead_expenses": [
-                      {{"expense_name": "Rent", "price": 0}},
-                      {{"expense_name": "Momo", "price": 0}}
-                    ],
-                    "total_overhead_expense": 0,
-                    "logged_by": ""
-                  }}
-                ]
-
-                EXTRACTION & DATE RULES:
-                1. "date": Read handwritten date headers. Infer sequentially if missing.
-                2. "total_overhead_expense": Extract total sum at bottom of overhead column.
-                3. Output strict valid JSON array only.
-                """
-
-        models_to_try = get_working_models()
-        response = None
-        last_exception = None
-
-        for model_name in models_to_try:
-          for attempt in range(3):
             try:
-              response = client.models.generate_content(
-                  model=model_name,
-                  contents=[ledger_img, prompt],
-                  config=types.GenerateContentConfig(
-                      response_mime_type="application/json"
-                  ),
-              )
-              if response:
-                break
-            except Exception as err:
-              last_exception = err
-              if (
-                  "503" in str(err)
-                  or "429" in str(err)
-                  or "UNAVAILABLE" in str(err)
-              ):
-                time.sleep(3 * (attempt + 1))
-              else:
-                break
-          if response:
-            break
+                # Query Gemini Model
+                response = gemini_client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=[raw_image, prompt]
+                )
+                
+                # Parse JSON output
+                response_text = response.text.strip()
+                if response_text.startswith("```json"):
+                    response_text = response_text.split("```json")[1].split("```")[0].strip()
+                elif response_text.startswith("```"):
+                    response_text = response_text.split("```")[1].split("```")[0].strip()
+                    
+                extracted_data = json.loads(response_text)
+                
+                st.success("Data successfully extracted!")
+                st.json(extracted_data)
+                
+                # ---------------------------------------------------------
+                # 4. GOOGLE SHEETS INSERTION LOGIC
+                # ---------------------------------------------------------
+                # Example: Open sheet and append rows
+                # sh = gc.open("Pharmacy_Ledger_Workbook")
+                # worksheet = sh.sheet1
+                # (Add your row mapping and insertion steps here)
 
-        if not response:
-          raise last_exception
-
-        records = json.loads(response.text)
-        if isinstance(records, dict):
-          records = [records]
-
-        rows_to_append = []
-        for data in records:
-          sales = data.get("sales", [])
-          overheads = data.get("overhead_expenses", [])
-          max_rows = max(len(sales), len(overheads), 1)
-
-          for i in range(max_rows):
-            row_date = data.get("date", "") if i == 0 else ""
-            row_net_sale = data.get("net_sale", "") if i == 0 else ""
-            row_total_overhead = (
-                data.get("total_overhead_expense", "") if i == 0 else ""
-            )
-            row_logged_by = data.get("logged_by", "") if i == 0 else ""
-
-            cat = sales[i].get("category", "") if i < len(sales) else ""
-            gross = sales[i].get("gross_sale", "") if i < len(sales) else ""
-            direct = sales[i].get("direct_expense", "") if i < len(sales) else ""
-
-            overhead = (
-                overheads[i].get("expense_name", "")
-                if i < len(overheads)
-                else ""
-            )
-            price = overheads[i].get("price", "") if i < len(overheads) else ""
-
-            rows_to_append.append([
-                row_date,
-                cat,
-                gross,
-                direct,
-                row_net_sale,
-                overhead,
-                price,
-                row_total_overhead,
-                row_logged_by,
-            ])
-
-        sheet.append_rows(rows_to_append)
-        st.success(
-            f"Successfully added {len(records)} daily records to Google"
-            " Sheets!"
-        )
-
-      except Exception as e:
-        st.error(f"Error processing image: {str(e)}")
+            except json.JSONDecodeError:
+                st.error("Failed to parse JSON response from Gemini. Raw output:")
+                st.code(response.text)
+            except Exception as e:
+                st.error(f"An error occurred during processing: {str(e)}")
