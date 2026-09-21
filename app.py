@@ -79,7 +79,7 @@ uploaded_file = st.file_uploader(
 
 if uploaded_file is not None:
     raw_image = Image.open(uploaded_file)
-    st.image(raw_image, caption="Uploaded Image", use_column_width=True)
+    st.image(raw_image, caption="Uploaded Image", use_container_width=True)
 
     if st.button("🚀 Process & Append to Google Sheets", type="primary"):
         with st.spinner("Analyzing handwritten ledger entries..."):
