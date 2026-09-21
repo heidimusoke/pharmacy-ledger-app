@@ -15,11 +15,10 @@ st.title("📑 Pharmacy Ledger Inserter")
 st.write("Upload or capture a photo of the daily logbook page.")
 
 # Fetch Gemini API Key from Streamlit Secrets (or fallback for local testing)
-GEMINI_API_KEY = st.secrets.get(
-    "GEMINI_API_KEY",
-    "AQ.Ab8RN6KhVtM3WvIqrMKVnT94EB2ZgmFG5KrvWXJ_WnlezYEh9Q",
-)
+# Fetch Gemini API Key from Streamlit Secrets
+GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 client = genai.Client(api_key=GEMINI_API_KEY)
+
 
 
 def get_google_sheet():
@@ -79,7 +78,7 @@ uploaded_file = st.file_uploader(
 
 if uploaded_file is not None:
   raw_image = Image.open(uploaded_file)
-  st.image(raw_image, caption="Uploaded Image", use_column_width=True)
+  st.image(raw_image, caption="Uploaded Image", use_container_width=True)
 
   if st.button("🚀 Process & Append to Google Sheets", type="primary"):
     with st.spinner("Analyzing handwritten ledger entries..."):
