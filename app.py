@@ -126,11 +126,12 @@ if uploaded_file is not None:
                 st.stop()
 
            # ---------------------------------------------------------
-            # 4. GOOGLE SHEETS INSERTION LOGIC (FIXED)
+            # 4. GOOGLE SHEETS INSERTION LOGIC
             # ---------------------------------------------------------
             if extracted_data:
                 try:
-                    sh = gc.open("Pharmacy_Ledger_Workbook") 
+                    # Open by exact sheet title "daily records"
+                    sh = gc.open("daily records") 
                     worksheet = sh.sheet1
 
                     rows_to_append = []
@@ -197,7 +198,6 @@ if uploaded_file is not None:
 
                         logged_by = str(entry.get("logged_by") or "")
 
-                        # Construct sanitized row consisting purely of strings and integers
                         clean_row = [
                             date_val, 
                             "Drugs", drugs_gross, drugs_direct,
@@ -207,12 +207,12 @@ if uploaded_file is not None:
                         rows_to_append.append(clean_row)
 
                     if rows_to_append:
-                        # Append rows as a batch array
                         worksheet.append_rows(rows_to_append, value_input_option="USER_ENTERED")
                         st.success("Successfully appended ledger entry to Google Sheets!")
 
+                except gspread.exceptions.SpreadsheetNotFound:
+                    st.error("Spreadsheet 'daily records' not found! Double-check that 'daily records' is shared with your service account email as an Editor.")
                 except Exception as sheet_err:
-                    # Unpack raw API response details if gspread throws a raw Response object
                     if hasattr(sheet_err, "response"):
                         st.error(f"Google Sheets API Error ({sheet_err.response.status_code}): {sheet_err.response.text}")
                     else:
