@@ -39,7 +39,7 @@ uploaded_file = st.file_uploader(
 
 if uploaded_file is not None:
     raw_image = Image.open(uploaded_file)
-    st.image(raw_image, caption="Uploaded Image", use_container_width=True) #[cite: 4]
+    st.image(raw_image, caption="Uploaded Image", use_container_width=True)
     
     # Optional date context to aid extraction
     date_context = st.text_input("Date Context (optional, e.g. Aug 2026):", "")
@@ -86,13 +86,28 @@ if uploaded_file is not None:
             8. Return strict, valid JSON format only without markdown formatting code blocks.
             """
 
+            # List of candidate models in order of priority
+            MODEL_FALLBACKS = ["gemini-3.6-flash", "gemini-1.5-flash", "gemini-2.5-flash"][cite: 5]
+            response = None
+            last_exception = None
+
+            for model_name in MODEL_FALLBACKS:
+                try:
+                    response = gemini_client.models.generate_content(
+                        model=model_name,
+                        contents=[raw_image, prompt]
+                    )
+                    st.info(f"Successfully processed using `{model_name}`")
+                    break
+                except Exception as model_err:
+                    last_exception = model_err
+                    continue  # Try next model in fallback list
+
+            if response is None:
+                st.error(f"All Gemini model fallbacks failed. Last error: {str(last_exception)}")
+                st.stop()
+
             try:
-                # Query Gemini Model
-                response = gemini_client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=[raw_image, prompt]
-                )
-                
                 # Parse JSON output
                 response_text = response.text.strip()
                 if response_text.startswith("```json"):
@@ -104,14 +119,6 @@ if uploaded_file is not None:
                 
                 st.success("Data successfully extracted!")
                 st.json(extracted_data)
-                
-                # ---------------------------------------------------------
-                # 4. GOOGLE SHEETS INSERTION LOGIC
-                # ---------------------------------------------------------
-                # Example: Open sheet and append rows
-                # sh = gc.open("Pharmacy_Ledger_Workbook")
-                # worksheet = sh.sheet1
-                # (Add your row mapping and insertion steps here)
 
             except json.JSONDecodeError:
                 st.error("Failed to parse JSON response from Gemini. Raw output:")
