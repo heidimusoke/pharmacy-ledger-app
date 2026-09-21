@@ -131,7 +131,7 @@ if uploaded_file is not None:
             if extracted_data:
                 try:
                     # Open by exact sheet title "daily records"
-                    sh = gc.open("daily records") 
+                    sh = gc.open("Daily Records") 
                     worksheet = sh.sheet1
 
                     rows_to_append = []
@@ -211,7 +211,7 @@ if uploaded_file is not None:
                         st.success("Successfully appended ledger entry to Google Sheets!")
 
                 except gspread.exceptions.SpreadsheetNotFound:
-                    st.error("Spreadsheet 'daily records' not found! Double-check that 'daily records' is shared with your service account email as an Editor.")
+                    st.error("Spreadsheet 'Daily Records' not found! Double-check that 'Daily Records' is shared with your service account email as an Editor.")
                 except Exception as sheet_err:
                     if hasattr(sheet_err, "response"):
                         st.error(f"Google Sheets API Error ({sheet_err.response.status_code}): {sheet_err.response.text}")
