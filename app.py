@@ -125,7 +125,7 @@ if uploaded_file is not None:
                 st.error(f"An error occurred during extraction parsing: {str(e)}")
                 st.stop()
 
-            # ---------------------------------------------------------
+           # ---------------------------------------------------------
             # 4. GOOGLE SHEETS INSERTION LOGIC
             # ---------------------------------------------------------
             if extracted_data:
@@ -134,46 +134,76 @@ if uploaded_file is not None:
                     worksheet = sh.sheet1
 
                     for entry in extracted_data:
-                        date_val = str(entry.get("date", ""))
+                        date_val = str(entry.get("date") or "")
                         
                         drugs_gross = 0
                         drugs_direct = 0
                         cosmetics_gross = 0
                         cosmetics_direct = 0
                         
-                        for item in entry.get("sales", []):
-                            cat = str(item.get("category", "")).lower()
-                            gross = item.get("gross_sale") or 0
-                            direct = item.get("direct_expense") or 0
+                        sales_list = entry.get("sales") if isinstance(entry.get("sales"), list) else []
+                        for item in sales_list:
+                            if not isinstance(item, dict):
+                                continue
+                            cat = str(item.get("category") or "").lower()
+                            gross_val = item.get("gross_sale") or 0
+                            direct_val = item.get("direct_expense") or 0
+                            
+                            try:
+                                gross_clean = int(float(gross_val))
+                            except (ValueError, TypeError):
+                                gross_clean = 0
+
+                            try:
+                                direct_clean = int(float(direct_val))
+                            except (ValueError, TypeError):
+                                direct_clean = 0
                             
                             if "drug" in cat:
-                                drugs_gross = int(gross)
-                                drugs_direct = int(direct)
+                                drugs_gross = gross_clean
+                                drugs_direct = direct_clean
                             elif "cos" in cat:
-                                cosmetics_gross = int(gross)
-                                cosmetics_direct = int(direct)
+                                cosmetics_gross = gross_clean
+                                cosmetics_direct = direct_clean
 
-                        net_sale = int(entry.get("net_sale") or 0)
+                        try:
+                            net_sale = int(float(entry.get("net_sale") or 0))
+                        except (ValueError, TypeError):
+                            net_sale = 0
 
                         overhead_map = {}
-                        for exp in entry.get("overhead_expenses", []):
-                            name = str(exp.get("expense_name", "")).strip().lower()
-                            price = exp.get("price") or 0
-                            overhead_map[name] = int(price)
+                        overhead_list = entry.get("overhead_expenses") if isinstance(entry.get("overhead_expenses"), list) else []
+                        for exp in overhead_list:
+                            if not isinstance(exp, dict):
+                                continue
+                            name = str(exp.get("expense_name") or "").strip().lower()
+                            p_val = exp.get("price") or 0
+                            try:
+                                price_clean = int(float(p_val))
+                            except (ValueError, TypeError):
+                                price_clean = 0
+                            overhead_map[name] = price_clean
                         
-                        rent = overhead_map.get("rent", 0)
-                        allowance = overhead_map.get("allow", overhead_map.get("allowance", 0))
-                        airtime = overhead_map.get("airtime", 0)
-                        total_overhead = int(entry.get("total_overhead_expense") or 0)
-                        logged_by = str(entry.get("logged_by", ""))
+                        rent = int(overhead_map.get("rent", 0))
+                        allowance = int(overhead_map.get("allow", overhead_map.get("allowance", 0)))
+                        airtime = int(overhead_map.get("airtime", 0))
+                        
+                        try:
+                            total_overhead = int(float(entry.get("total_overhead_expense") or 0))
+                        except (ValueError, TypeError):
+                            total_overhead = 0
 
+                        logged_by = str(entry.get("logged_by") or "")
+
+                        # Construct sanitized primitive row array
                         row_data = [
-                            date_val, 
-                            "Drugs", drugs_gross, drugs_direct,
-                            "Cosmetics", cosmetics_gross, cosmetics_direct,
-                            net_sale, rent, allowance, airtime, total_overhead, logged_by
+                            str(date_val), 
+                            "Drugs", int(drugs_gross), int(drugs_direct),
+                            "Cosmetics", int(cosmetics_gross), int(cosmetics_direct),
+                            int(net_sale), int(rent), int(allowance), int(airtime), int(total_overhead), str(logged_by)
                         ]
 
+                        # Append clean row
                         worksheet.append_row(row_data, value_input_option="USER_ENTERED")
 
                     st.success("Successfully appended ledger entry to Google Sheets!")
