@@ -13,7 +13,6 @@ st.write("Upload or capture a photo of the daily logbook page.")
 # ---------------------------------------------------------
 # 1. AUTHENTICATION & SECRETS
 # ---------------------------------------------------------
-# Fetch Gemini API Key securely from Streamlit secrets
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
@@ -21,7 +20,6 @@ except Exception as e:
     st.error("Error loading GEMINI_API_KEY from secrets. Please check Advanced Settings.")
     st.stop()
 
-# Connect to Google Sheets via Service Account Secrets
 try:
     gcp_credentials = dict(st.secrets["gcp_service_account"])
     gc = gspread.service_account_from_dict(gcp_credentials)
@@ -41,7 +39,6 @@ if uploaded_file is not None:
     raw_image = Image.open(uploaded_file)
     st.image(raw_image, caption="Uploaded Image", use_container_width=True)
     
-    # Optional date context to aid extraction
     date_context = st.text_input("Date Context (optional, e.g. Aug 2026):", "")
     date_context_str = f"Context date hint: {date_context}" if date_context else ""
 
@@ -86,7 +83,6 @@ if uploaded_file is not None:
             8. Return strict, valid JSON format only without markdown formatting code blocks.
             """
 
-            # Clean list of candidate models in order of priority
             MODEL_FALLBACKS = ["gemini-3.6-flash", "gemini-flash", "gemini-3-flash"]
             response = None
             last_exception = None
@@ -101,14 +97,14 @@ if uploaded_file is not None:
                     break
                 except Exception as model_err:
                     last_exception = model_err
-                    continue  # Try next model in fallback list
+                    continue
 
             if response is None:
                 st.error(f"All Gemini model fallbacks failed. Last error: {str(last_exception)}")
                 st.stop()
 
+            extracted_data = None
             try:
-                # Parse JSON output
                 response_text = response.text.strip()
                 if response_text.startswith("```json"):
                     response_text = response_text.split("```json")[1].split("```")[0].strip()
@@ -116,12 +112,66 @@ if uploaded_file is not None:
                     response_text = response_text.split("```")[1].split("```")[0].strip()
                     
                 extracted_data = json.loads(response_text)
-                
                 st.success("Data successfully extracted!")
                 st.json(extracted_data)
 
             except json.JSONDecodeError:
                 st.error("Failed to parse JSON response from Gemini. Raw output:")
                 st.code(response.text)
+                st.stop()
             except Exception as e:
-                st.error(f"An error occurred during processing: {str(e)}")
+                st.error(f"An error occurred during extraction parsing: {str(e)}")
+                st.stop()
+
+            # ---------------------------------------------------------
+            # 4. GOOGLE SHEETS INSERTION LOGIC
+            # ---------------------------------------------------------
+            if extracted_data:
+                try:
+                    # Make sure this title matches your Google Sheet exactly
+                    sh = gc.open("Pharmacy_Ledger_Workbook") 
+                    worksheet = sh.sheet1
+
+                    for entry in extracted_data:
+                        date_val = entry.get("date", "")
+                        
+                        drugs_gross = 0
+                        drugs_direct = 0
+                        cosmetics_gross = 0
+                        cosmetics_direct = 0
+                        
+                        for item in entry.get("sales", []):
+                            cat = str(item.get("category", "")).lower()
+                            if "drug" in cat:
+                                drugs_gross = item.get("gross_sale", 0)
+                                drugs_direct = item.get("direct_expense", 0)
+                            elif "cos" in cat:
+                                cosmetics_gross = item.get("gross_sale", 0)
+                                cosmetics_direct = item.get("direct_expense", 0)
+
+                        net_sale = entry.get("net_sale", 0)
+
+                        overhead_map = {
+                            str(exp.get("expense_name", "")).strip(): exp.get("price", 0) 
+                            for exp in entry.get("overhead_expenses", [])
+                        }
+                        
+                        rent = overhead_map.get("Rent", 0)
+                        allowance = overhead_map.get("Allow", overhead_map.get("Allowance", 0))
+                        airtime = overhead_map.get("Airtime", 0)
+                        total_overhead = entry.get("total_overhead_expense", 0)
+                        logged_by = entry.get("logged_by", "")
+
+                        row_data = [
+                            date_val, 
+                            "Drugs", drugs_gross, drugs_direct,
+                            "Cosmetics", cosmetics_gross, cosmetics_direct,
+                            net_sale, rent, allowance, airtime, total_overhead, logged_by
+                        ]
+
+                        worksheet.append_row(row_data)
+
+                    st.success("Successfully appended ledger entry to Google Sheets!")
+
+                except Exception as sheet_err:
+                    st.error(f"Error appending to Google Sheets: {str(sheet_err)}")
