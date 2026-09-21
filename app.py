@@ -86,8 +86,8 @@ if uploaded_file is not None:
             8. Return strict, valid JSON format only without markdown formatting code blocks.
             """
 
-            # List of candidate models in order of priority
-            MODEL_FALLBACKS = ["gemini-3.6-flash", "gemini-1.5-flash", "gemini-2.5-flash"][cite: 5]
+            # Clean list of candidate models in order of priority
+            MODEL_FALLBACKS = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"]
             response = None
             last_exception = None
 
