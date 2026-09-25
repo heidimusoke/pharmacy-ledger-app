@@ -117,7 +117,7 @@ def confirm_and_submit_dialog(
             hide_index=True,
         )
 
-    st.markdown(f"### **Net Sale:** {calculated_net_sale:,} UGX")
+    st.write(f"**Net Sale:** {calculated_net_sale:,} UGX")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -326,9 +326,8 @@ with tab1:
 # TAB 2: MANUAL ENTRY FORM
 # ==========================================
 with tab2:
-    st.subheader("Manual Ledger Entry")
+    st.write("### Manual Ledger Entry")
 
-    # Initialize session state for dynamic overhead expense fields
     if "expense_count" not in st.session_state:
         st.session_state.expense_count = 1
 
@@ -339,26 +338,26 @@ with tab2:
         logged_by = st.text_input("Logged By", placeholder="e.g. FLAVIA")
 
     st.markdown("---")
-    st.markdown("##### 💊 Drugs")
+    st.write("💊 **Drugs**")
     d_col1, d_col2, d_col3 = st.columns(3)
     with d_col1:
-        drugs_gross = st.number_input("Drugs Gross Sale", min_value=0, value=0, step=None)
+        drugs_gross_raw = st.text_input("Drugs Gross Sale", value="0")
     with d_col2:
-        drugs_cash = st.number_input("Drugs Cash Sale", min_value=0, value=0, step=None)
+        drugs_cash_raw = st.text_input("Drugs Cash Sale", value="0")
     with d_col3:
-        drugs_expense = st.number_input("Drugs Direct Expense", min_value=0, value=0, step=None)
+        drugs_expense_raw = st.text_input("Drugs Direct Expense", value="0")
 
-    st.markdown("##### 💄 Cosmetics")
+    st.write("💄 **Cosmetics**")
     c_col1, c_col2, c_col3 = st.columns(3)
     with c_col1:
-        cosmetics_gross = st.number_input("Cosmetics Gross Sale", min_value=0, value=0, step=None)
+        cosmetics_gross_raw = st.text_input("Cosmetics Gross Sale", value="0")
     with c_col2:
-        cosmetics_cash = st.number_input("Cosmetics Cash Sale", min_value=0, value=0, step=None)
+        cosmetics_cash_raw = st.text_input("Cosmetics Cash Sale", value="0")
     with c_col3:
-        cosmetics_expense = st.number_input("Cosmetics Direct Expense", min_value=0, value=0, step=None)
+        cosmetics_expense_raw = st.text_input("Cosmetics Direct Expense", value="0")
 
     st.markdown("---")
-    st.markdown("##### 💸 Overhead Expenses")
+    st.write("💸 **Overhead Expenses**")
 
     overheads_list = []
     for idx in range(st.session_state.expense_count):
@@ -368,10 +367,10 @@ with tab2:
                 f"Expense {idx+1} Name", key=f"exp_name_{idx}", placeholder="e.g. Rent"
             )
         with e_col2:
-            exp_price = st.number_input(
-                f"Expense {idx+1} Price", key=f"exp_price_{idx}", min_value=0, value=0, step=None
+            exp_price_raw = st.text_input(
+                f"Expense {idx+1} Price", key=f"exp_price_{idx}", value="0"
             )
-        overheads_list.append((exp_name, exp_price))
+        overheads_list.append((exp_name, exp_price_raw))
 
     col_add_exp, _ = st.columns([1, 2])
     with col_add_exp:
@@ -381,10 +380,27 @@ with tab2:
 
     st.markdown("---")
 
-    # Calculate Totals & Net Sale
+    def parse_amount(val):
+        try:
+            return int(str(val).replace(",", "").strip())
+        except (ValueError, AttributeError):
+            return 0
+
+    drugs_gross = parse_amount(drugs_gross_raw)
+    drugs_cash = parse_amount(drugs_cash_raw)
+    drugs_expense = parse_amount(drugs_expense_raw)
+
+    cosmetics_gross = parse_amount(cosmetics_gross_raw)
+    cosmetics_cash = parse_amount(cosmetics_cash_raw)
+    cosmetics_expense = parse_amount(cosmetics_expense_raw)
+
+    parsed_overheads = [
+        (name.strip(), parse_amount(price_str)) for name, price_str in overheads_list
+    ]
+
     total_gross = drugs_gross + cosmetics_gross
     total_direct_exp = drugs_expense + cosmetics_expense
-    total_overheads = sum(p for _, p in overheads_list)
+    total_overheads = sum(p for _, p in parsed_overheads)
     calculated_net_sale = total_gross - total_direct_exp - total_overheads
 
     st.info(f"**Calculated Net Sale:** {calculated_net_sale:,} UGX")
@@ -392,9 +408,9 @@ with tab2:
     if st.button("📌 Save Entry to Google Sheets", type="primary"):
         formatted_date = entry_date.strftime("%d/%m/%Y").lstrip("0").replace("/0", "/")
         valid_overheads = [
-            (name.strip(), price if price > 0 else "")
-            for name, price in overheads_list
-            if name.strip() or price > 0
+            (name, price if price > 0 else "")
+            for name, price in parsed_overheads
+            if name or price > 0
         ]
 
         confirm_and_submit_dialog(
