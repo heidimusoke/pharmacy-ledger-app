@@ -12,7 +12,7 @@ st.set_page_config(
 )
 
 st.title("📑 Pharmacy Ledger Inserter")
-st.write("Upload or capture a photo of the daily logbook page.")
+st.write("Scan a ledger photo or manually enter daily record details.")
 
 # Fetch Gemini API Key from Streamlit Secrets (or fallback for local testing)
 GEMINI_API_KEY = st.secrets.get(
@@ -71,148 +71,259 @@ def preprocess_image(pil_img):
     return img
 
 
-# Mobile File/Camera Uploader
-uploaded_file = st.file_uploader(
-    "Select ledger photo from Gallery or Camera",
-    type=["jpg", "jpeg", "png"],
-)
+# Navigation Tabs
+tab1, tab2 = st.tabs(["📷 Upload & Scan", "✍️ Manual Entry"])
 
-if uploaded_file is not None:
-    raw_image = Image.open(uploaded_file)
-    st.image(raw_image, caption="Uploaded Image", use_container_width=True)
+# ==========================================
+# TAB 1: UPLOAD & SCAN VIA GEMINI
+# ==========================================
+with tab1:
+    uploaded_file = st.file_uploader(
+        "Select ledger photo from Gallery or Camera",
+        type=["jpg", "jpeg", "png"],
+    )
 
-    if st.button("🚀 Process & Append to Google Sheets", type="primary"):
-        with st.spinner("Analyzing handwritten ledger entries..."):
-            try:
-                ledger_img = preprocess_image(raw_image)
-                sheet = get_google_sheet()
-                last_date = get_last_sheet_date(sheet)
+    if uploaded_file is not None:
+        raw_image = Image.open(uploaded_file)
+        st.image(raw_image, caption="Uploaded Image", use_container_width=True)
 
-                date_context_str = (
-                    f"The last date recorded in the spreadsheet prior to this page was:"
-                    f" {last_date}."
-                    if last_date
-                    else "No previous dates found in sheet."
-                )
+        if st.button("🚀 Process & Append to Google Sheets", type="primary"):
+            with st.spinner("Analyzing handwritten ledger entries..."):
+                try:
+                    ledger_img = preprocess_image(raw_image)
+                    sheet = get_google_sheet()
+                    last_date = get_last_sheet_date(sheet)
 
-                prompt = f"""
-                Analyze this handwritten pharmacy logbook image with high accuracy.
-                {date_context_str}
+                    date_context_str = (
+                        f"The last date recorded in the spreadsheet prior to this page was:"
+                        f" {last_date}."
+                        if last_date
+                        else "No previous dates found in sheet."
+                    )
 
-                CRITICAL NUMBER EXTRACTION INSTRUCTIONS:
-                - Take extra care reading digits (e.g., distinguish clearly between 0, 1, 6, 7, and 8).
-                - Do not omit zeros at the end of amounts (e.g., read 33000 as 33000, not 3300).
-                - Look closely at every row and column in the handwritten ledger.
+                    prompt = f"""
+                    Analyze this handwritten pharmacy logbook image with high accuracy.
+                    {date_context_str}
 
-                Extract EVERY daily entry shown in the image and return ONLY a valid JSON array matching this schema:
+                    CRITICAL NUMBER EXTRACTION INSTRUCTIONS:
+                    - Take extra care reading digits (e.g., distinguish clearly between 0, 1, 6, 7, and 8).
+                    - Do not omit zeros at the end of amounts (e.g., read 33000 as 33000, not 3300).
+                    - Look closely at every row and column in the handwritten ledger.
 
-                [
-                  {{
-                    "date": "D/M/YYYY",
-                    "sales": [
-                      {{"category": "Drugs", "gross_sale": 416700, "cash_sale": 411100, "direct_expense": 5600}},
-                      {{"category": "Cosmetics", "gross_sale": 33500, "cash_sale": 33500, "direct_expense": 0}}
-                    ],
-                    "net_sale": 356200,
-                    "overhead_expenses": [
-                      {{"expense_name": "Rent", "price": 33000}},
-                      {{"expense_name": "Momo", "price": 35000}},
-                      {{"expense_name": "Allow+AT", "price": 21000}}
-                    ],
-                    "logged_by": "FLAVIA"
-                  }}
-                ]
+                    Extract EVERY daily entry shown in the image and return ONLY a valid JSON array matching this schema:
 
-                EXTRACTION & DATE RULES:
-                1. "date": Read handwritten date headers and format strictly as D/M/YYYY (Day/Month/Year, e.g., 8/11/2026 for 8th November 2026 or 11/8/2026 for 11th August 2026 depending on the log).
-                2. Output strict valid JSON array only with no markdown wrapping.
-                """
+                    [
+                      {{
+                        "date": "D/M/YYYY",
+                        "sales": [
+                          {{"category": "Drugs", "gross_sale": 416700, "cash_sale": 411100, "direct_expense": 5600}},
+                          {{"category": "Cosmetics", "gross_sale": 33500, "cash_sale": 33500, "direct_expense": 0}}
+                        ],
+                        "net_sale": 356200,
+                        "overhead_expenses": [
+                          {{"expense_name": "Rent", "price": 33000}},
+                          {{"expense_name": "Momo", "price": 35000}},
+                          {{"expense_name": "Allow+AT", "price": 21000}}
+                        ],
+                        "logged_by": "FLAVIA"
+                      }}
+                    ]
 
-                models_to_try = get_working_models()
-                response = None
-                last_exception = None
+                    EXTRACTION & DATE RULES:
+                    1. "date": Read handwritten date headers and format strictly as D/M/YYYY (Day/Month/Year).
+                    2. Output strict valid JSON array only with no markdown wrapping.
+                    """
 
-                for model_name in models_to_try:
-                    for attempt in range(3):
-                        try:
-                            response = client.models.generate_content(
-                                model=model_name,
-                                contents=[ledger_img, prompt],
-                                config=types.GenerateContentConfig(
-                                    response_mime_type="application/json"
-                                ),
-                            )
-                            if response:
-                                break
-                        except Exception as err:
-                            last_exception = err
-                            if (
-                                "503" in str(err)
-                                or "429" in str(err)
-                                or "UNAVAILABLE" in str(err)
-                            ):
-                                time.sleep(3 * (attempt + 1))
+                    models_to_try = get_working_models()
+                    response = None
+                    last_exception = None
+
+                    for model_name in models_to_try:
+                        for attempt in range(3):
+                            try:
+                                response = client.models.generate_content(
+                                    model=model_name,
+                                    contents=[ledger_img, prompt],
+                                    config=types.GenerateContentConfig(
+                                        response_mime_type="application/json"
+                                    ),
+                                )
+                                if response:
+                                    break
+                            except Exception as err:
+                                last_exception = err
+                                if (
+                                    "503" in str(err)
+                                    or "429" in str(err)
+                                    or "UNAVAILABLE" in str(err)
+                                ):
+                                    time.sleep(3 * (attempt + 1))
+                                else:
+                                    break
+                        if response:
+                            break
+
+                    if not response:
+                        raise last_exception
+
+                    records = json.loads(response.text)
+                    if isinstance(records, dict):
+                        records = [records]
+
+                    rows_to_append = []
+                    for data in records:
+                        sales = data.get("sales", [])
+                        overheads = data.get("overhead_expenses", [])
+                        max_rows = max(len(sales), len(overheads), 2)
+
+                        for i in range(max_rows):
+                            row_date = data.get("date", "") if i == 0 else ""
+                            row_net_sale = data.get("net_sale", "") if i == 0 else ""
+                            row_logged_by = data.get("logged_by", "") if i == 0 else ""
+
+                            if i < len(sales):
+                                cat = sales[i].get("category", "")
+                                gross = sales[i].get("gross_sale", "")
+                                cash = sales[i].get("cash_sale", gross)
+                                direct = sales[i].get("direct_expense", "")
                             else:
-                                break
-                    if response:
-                        break
+                                cat, gross, cash, direct = "", "", "", ""
 
-                if not response:
-                    raise last_exception
+                            if i < len(overheads):
+                                overhead_name = overheads[i].get("expense_name", "")
+                                overhead_price = overheads[i].get("price", "")
+                            else:
+                                overhead_name, overhead_price = "", ""
 
-                records = json.loads(response.text)
-                if isinstance(records, dict):
-                    records = [records]
+                            rows_to_append.append([
+                                row_date,
+                                cat,
+                                gross,
+                                cash,
+                                direct,
+                                overhead_name,
+                                overhead_price,
+                                row_net_sale,
+                                row_logged_by
+                            ])
 
-                rows_to_append = []
-                for data in records:
-                    sales = data.get("sales", [])
-                    overheads = data.get("overhead_expenses", [])
-                    max_rows = max(len(sales), len(overheads), 2)  # Ensure at least Drugs & Cosmetics rows
+                    sheet.append_rows(rows_to_append, value_input_option="USER_ENTERED")
+                    st.success(
+                        f"Successfully added {len(records)} daily records to Google Sheets!"
+                    )
 
-                    for i in range(max_rows):
-                        # Row 1 headers metadata
-                        row_date = data.get("date", "") if i == 0 else ""
-                        row_net_sale = data.get("net_sale", "") if i == 0 else ""
-                        row_logged_by = data.get("logged_by", "") if i == 0 else ""
+                except Exception as e:
+                    st.error(f"Error processing image: {str(e)}")
 
-                        # Sales line item columns
-                        if i < len(sales):
-                            cat = sales[i].get("category", "")
-                            gross = sales[i].get("gross_sale", "")
-                            cash = sales[i].get("cash_sale", gross)
-                            direct = sales[i].get("direct_expense", "")
-                        else:
-                            cat = ""
-                            gross = ""
-                            cash = ""
-                            direct = ""
+# ==========================================
+# TAB 2: MANUAL ENTRY FORM
+# ==========================================
+with tab2:
+    st.subheader("Manual Ledger Entry")
 
-                        # Overhead expenses columns
-                        if i < len(overheads):
-                            overhead_name = overheads[i].get("expense_name", "")
-                            overhead_price = overheads[i].get("price", "")
-                        else:
-                            overhead_name = ""
-                            overhead_price = ""
+    with st.form("manual_ledger_form", clear_on_submit=False):
+        col_date, col_logger = st.columns(2)
+        with col_date:
+            entry_date = st.date_input("Date", format="DD/MM/YYYY")
+        with col_logger:
+            logged_by = st.text_input("Logged By", value="FLAVIA")
 
-                        # Appends in exact visual column order matching Daily Records
-                        rows_to_append.append([
-                            row_date,        # Col A: Date
-                            cat,             # Col B: Category (Drugs / Cosmetics)
-                            gross,           # Col C: Gross Sale
-                            cash,            # Col D: Cash / Gross
-                            direct,          # Col E: Direct Expense
-                            overhead_name,   # Col F: Expense Name
-                            overhead_price,  # Col G: Expense Price
-                            row_net_sale,    # Col H: Net Sale
-                            row_logged_by    # Col I: Logged By
-                        ])
+        st.markdown("---")
+        st.markdown("##### 💊 Drugs")
+        d_col1, d_col2, d_col3 = st.columns(3)
+        with d_col1:
+            drugs_gross = st.number_input("Drugs Gross Sale", min_value=0, value=0, step=500)
+        with d_col2:
+            drugs_cash = st.number_input("Drugs Cash Sale", min_value=0, value=0, step=500)
+        with d_col3:
+            drugs_expense = st.number_input("Drugs Direct Expense", min_value=0, value=0, step=500)
 
-                sheet.append_rows(rows_to_append, value_input_option="USER_ENTERED")
-                st.success(
-                    f"Successfully added {len(records)} daily records to Google Sheets!"
-                )
+        st.markdown("##### 💄 Cosmetics")
+        c_col1, c_col2, c_col3 = st.columns(3)
+        with c_col1:
+            cosmetics_gross = st.number_input("Cosmetics Gross Sale", min_value=0, value=0, step=500)
+        with c_col2:
+            cosmetics_cash = st.number_input("Cosmetics Cash Sale", min_value=0, value=0, step=500)
+        with c_col3:
+            cosmetics_expense = st.number_input("Cosmetics Direct Expense", min_value=0, value=0, step=500)
 
-            except Exception as e:
-                st.error(f"Error processing image: {str(e)}")
+        st.markdown("---")
+        st.markdown("##### 💸 Overhead Expenses")
+
+        e1_col1, e1_col2 = st.columns(2)
+        with e1_col1:
+            exp1_name = st.text_input("Expense 1 Name", placeholder="e.g. Rent")
+        with e1_col2:
+            exp1_price = st.number_input("Expense 1 Price", min_value=0, value=0, step=500)
+
+        e2_col1, e2_col2 = st.columns(2)
+        with e2_col1:
+            exp2_name = st.text_input("Expense 2 Name", placeholder="e.g. Momo")
+        with e2_col2:
+            exp2_price = st.number_input("Expense 2 Price", min_value=0, value=0, step=500)
+
+        e3_col1, e3_col2 = st.columns(2)
+        with e3_col1:
+            exp3_name = st.text_input("Expense 3 Name", placeholder="e.g. Allow+AT")
+        with e3_col2:
+            exp3_price = st.number_input("Expense 3 Price", min_value=0, value=0, step=500)
+
+        st.markdown("---")
+
+        # Auto-calculate Net Sale
+        total_gross = drugs_gross + cosmetics_gross
+        total_direct_exp = drugs_expense + cosmetics_expense
+        total_overheads = exp1_price + exp2_price + exp3_price
+        calculated_net_sale = total_gross - total_direct_exp - total_overheads
+
+        st.info(f"**Calculated Net Sale:** {calculated_net_sale:,} UGX")
+
+        submit_manual = st.form_submit_button("📌 Save Entry to Google Sheets", type="primary")
+
+    if submit_manual:
+        try:
+            sheet = get_google_sheet()
+            formatted_date = entry_date.strftime("%d/%m/%Y").lstrip("0").replace("/0", "/")
+
+            overheads_input = []
+            for name, price in [(exp1_name, exp1_price), (exp2_name, exp2_price), (exp3_name, exp3_price)]:
+                if name.strip() or price > 0:
+                    overheads_input.append((name.strip(), price if price > 0 else ""))
+
+            max_rows = max(2, len(overheads_input))
+            manual_rows = []
+
+            for i in range(max_rows):
+                row_d = formatted_date if i == 0 else ""
+                row_net = calculated_net_sale if i == 0 else ""
+                row_log = logged_by.strip() if i == 0 else ""
+
+                if i == 0:
+                    cat, gross, cash, direct = "Drugs", drugs_gross or "", drugs_cash or "", drugs_expense or ""
+                elif i == 1:
+                    cat, gross, cash, direct = "Cosmetics", cosmetics_gross or "", cosmetics_cash or "", cosmetics_expense or ""
+                else:
+                    cat, gross, cash, direct = "", "", "", ""
+
+                if i < len(overheads_input):
+                    exp_name, exp_price = overheads_input[i]
+                else:
+                    exp_name, exp_price = "", ""
+
+                manual_rows.append([
+                    row_d,
+                    cat,
+                    gross,
+                    cash,
+                    direct,
+                    exp_name,
+                    exp_price,
+                    row_net,
+                    row_log
+                ])
+
+            sheet.append_rows(manual_rows, value_input_option="USER_ENTERED")
+            st.success(f"Successfully added manual record for {formatted_date}!")
+
+        except Exception as err:
+            st.error(f"Error submitting manual entry: {str(err)}")
