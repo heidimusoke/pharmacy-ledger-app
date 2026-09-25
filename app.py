@@ -12,7 +12,7 @@ st.set_page_config(
 )
 
 st.title("📑 Pharmacy Ledger Inserter")
-st.write("Scan a ledger photo or manually enter daily record details.")
+st.write("Scan a ledger photo, manually enter daily records, or edit existing sheet entries.")
 
 # Fetch Gemini API Key from Streamlit Secrets (or fallback for local testing)
 GEMINI_API_KEY = st.secrets.get(
@@ -25,11 +25,9 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 def get_google_sheet():
     """Connects to Google Sheets using credentials stored in Streamlit Secrets."""
     if "gcp_service_account" in st.secrets:
-        # Production: Load JSON object directly from Streamlit Cloud Secrets
         creds_dict = dict(st.secrets["gcp_service_account"])
         gc = gspread.service_account_from_dict(creds_dict)
     else:
-        # Local fallback: Load local file
         gc = gspread.service_account(filename="credentials.json")
     return gc.open("Daily Records").sheet1
 
@@ -45,6 +43,20 @@ def get_last_sheet_date(sheet):
     except Exception:
         pass
     return None
+
+
+def get_unique_dates(sheet):
+    """Fetches all unique non-header dates recorded in Column A."""
+    try:
+        dates = sheet.col_values(1)
+        unique_dates = []
+        for d in dates:
+            d_clean = d.strip()
+            if d_clean and d_clean.lower() != "date" and d_clean not in unique_dates:
+                unique_dates.append(d_clean)
+        return list(reversed(unique_dates))
+    except Exception:
+        return []
 
 
 def get_working_models():
@@ -71,7 +83,15 @@ def preprocess_image(pil_img):
     return img
 
 
-# Confirmation Modal Dialog
+def parse_amount(val):
+    """Safely converts input string to integer."""
+    try:
+        return int(str(val).replace(",", "").strip())
+    except (ValueError, AttributeError):
+        return 0
+
+
+# Confirmation Modal Dialog for Manual Submission
 @st.dialog("Confirm Data Submission")
 def confirm_and_submit_dialog(
     formatted_date,
@@ -179,7 +199,7 @@ def confirm_and_submit_dialog(
 
 
 # Navigation Tabs
-tab1, tab2 = st.tabs(["📷 Upload & Scan", "✍️ Manual Entry"])
+tab1, tab2, tab3 = st.tabs(["📷 Upload & Scan", "✍️ Manual Entry", "✏️ Edit Records"])
 
 # ==========================================
 # TAB 1: UPLOAD & SCAN VIA GEMINI
@@ -380,12 +400,6 @@ with tab2:
 
     st.markdown("---")
 
-    def parse_amount(val):
-        try:
-            return int(str(val).replace(",", "").strip())
-        except (ValueError, AttributeError):
-            return 0
-
     drugs_gross = parse_amount(drugs_gross_raw)
     drugs_cash = parse_amount(drugs_cash_raw)
     drugs_expense = parse_amount(drugs_expense_raw)
@@ -406,22 +420,187 @@ with tab2:
     st.info(f"**Calculated Net Sale:** {calculated_net_sale:,} UGX")
 
     if st.button("📌 Save Entry to Google Sheets", type="primary"):
-        formatted_date = entry_date.strftime("%d/%m/%Y").lstrip("0").replace("/0", "/")
-        valid_overheads = [
-            (name, price if price > 0 else "")
-            for name, price in parsed_overheads
-            if name or price > 0
-        ]
+        missing_fields = []
 
-        confirm_and_submit_dialog(
-            formatted_date=formatted_date,
-            logged_by=logged_by,
-            drugs_gross=drugs_gross,
-            drugs_cash=drugs_cash,
-            drugs_expense=drugs_expense,
-            cosmetics_gross=cosmetics_gross,
-            cosmetics_cash=cosmetics_cash,
-            cosmetics_expense=cosmetics_expense,
-            valid_overheads=valid_overheads,
-            calculated_net_sale=calculated_net_sale,
-        )
+        if not logged_by.strip():
+            missing_fields.append("Logged By")
+
+        if drugs_gross == 0 and cosmetics_gross == 0:
+            missing_fields.append("At least one Gross Sale (Drugs or Cosmetics)")
+
+        for idx, (name, price) in enumerate(parsed_overheads):
+            if name and price == 0:
+                missing_fields.append(f"Price for Expense '{name}'")
+            elif not name and price > 0:
+                missing_fields.append(f"Name for Expense #{idx+1}")
+
+        if missing_fields:
+            st.error(
+                "⚠️ Please fill in all required fields before submitting:\n\n- "
+                + "\n- ".join(missing_fields)
+            )
+        else:
+            formatted_date = entry_date.strftime("%d/%m/%Y").lstrip("0").replace("/0", "/")
+            valid_overheads = [
+                (name, price if price > 0 else "")
+                for name, price in parsed_overheads
+                if name or price > 0
+            ]
+
+            confirm_and_submit_dialog(
+                formatted_date=formatted_date,
+                logged_by=logged_by,
+                drugs_gross=drugs_gross,
+                drugs_cash=drugs_cash,
+                drugs_expense=drugs_expense,
+                cosmetics_gross=cosmetics_gross,
+                cosmetics_cash=cosmetics_cash,
+                cosmetics_expense=cosmetics_expense,
+                valid_overheads=valid_overheads,
+                calculated_net_sale=calculated_net_sale,
+            )
+
+# ==========================================
+# TAB 3: EDIT EXISTING RECORDS
+# ==========================================
+with tab3:
+    st.write("### Edit Existing Record")
+
+    try:
+        sheet = get_google_sheet()
+        available_dates = get_unique_dates(sheet)
+    except Exception as e:
+        available_dates = []
+        st.error(f"Error connecting to Google Sheets: {str(e)}")
+
+    if not available_dates:
+        st.info("No recorded entries found in the Google Sheet.")
+    else:
+        selected_edit_date = st.selectbox("Select Date to Edit", options=available_dates)
+
+        if selected_edit_date:
+            all_records = sheet.get_all_values()
+
+            # Find row indices for selected date
+            target_indices = []
+            for idx, row in enumerate(all_records):
+                if row and row[0].strip() == selected_edit_date:
+                    target_indices.append(idx + 1)  # 1-based index for gspread
+
+            # Collect existing blocks for Drugs, Cosmetics, and Overheads
+            drugs_row_idx = None
+            cosmetics_row_idx = None
+            overhead_rows = []
+
+            for r_idx in target_indices:
+                row_data = all_records[r_idx - 1]
+                category = row_data[1].strip() if len(row_data) > 1 else ""
+
+                if category == "Drugs" and drugs_row_idx is None:
+                    drugs_row_idx = r_idx
+                elif category == "Cosmetics" and cosmetics_row_idx is None:
+                    cosmetics_row_idx = r_idx
+
+                exp_name = row_data[5].strip() if len(row_data) > 5 else ""
+                exp_price = row_data[6].strip() if len(row_data) > 6 else ""
+                if exp_name or exp_price:
+                    overhead_rows.append((r_idx, exp_name, exp_price))
+
+            # Fetch current values
+            edit_logged_by = ""
+            if target_indices:
+                first_row = all_records[target_indices[0] - 1]
+                edit_logged_by = first_row[8] if len(first_row) > 8 else ""
+
+            edit_logger = st.text_input("Logged By", value=edit_logged_by, key="edit_logger")
+
+            st.markdown("---")
+            st.write("💊 **Drugs**")
+            d_row = all_records[drugs_row_idx - 1] if drugs_row_idx else []
+            e_d_gross = st.text_input("Drugs Gross", value=d_row[2] if len(d_row) > 2 else "0", key="e_dg")
+            e_d_cash = st.text_input("Drugs Cash", value=d_row[3] if len(d_row) > 3 else "0", key="e_dc")
+            e_d_exp = st.text_input("Drugs Expense", value=d_row[4] if len(d_row) > 4 else "0", key="e_de")
+
+            st.write("💄 **Cosmetics**")
+            c_row = all_records[cosmetics_row_idx - 1] if cosmetics_row_idx else []
+            e_c_gross = st.text_input("Cosmetics Gross", value=c_row[2] if len(c_row) > 2 else "0", key="e_cg")
+            e_c_cash = st.text_input("Cosmetics Cash", value=c_row[3] if len(c_row) > 3 else "0", key="e_cc")
+            e_c_exp = st.text_input("Cosmetics Expense", value=c_row[4] if len(c_row) > 4 else "0", key="e_ce")
+
+            st.markdown("---")
+            st.write("💸 **Overhead Expenses**")
+
+            e_overheads = []
+            for i, (r_i, name, price) in enumerate(overhead_rows):
+                col_o1, col_o2 = st.columns(2)
+                with col_o1:
+                    o_n = st.text_input(f"Expense #{i+1} Name", value=name, key=f"e_on_{i}")
+                with col_o2:
+                    o_p = st.text_input(f"Expense #{i+1} Price", value=price, key=f"e_op_{i}")
+                e_overheads.append((r_i, o_n, o_p))
+
+            st.markdown("---")
+
+            p_d_gross = parse_amount(e_d_gross)
+            p_d_cash = parse_amount(e_d_cash)
+            p_d_exp = parse_amount(e_d_exp)
+
+            p_c_gross = parse_amount(e_c_gross)
+            p_c_cash = parse_amount(e_c_cash)
+            p_c_exp = parse_amount(e_c_exp)
+
+            p_overheads_total = sum(parse_amount(p) for _, _, p in e_overheads)
+            recalc_net = (p_d_gross + p_c_gross) - (p_d_exp + p_c_exp) - p_overheads_total
+
+            st.info(f"**Updated Net Sale:** {recalc_net:,} UGX")
+
+            if st.button("✏️ Save Edits to Google Sheets", type="primary"):
+                # Validation checks for editing
+                edit_missing_fields = []
+
+                if not edit_logger.strip():
+                    edit_missing_fields.append("Logged By")
+
+                if p_d_gross == 0 and p_c_gross == 0:
+                    edit_missing_fields.append("At least one Gross Sale (Drugs or Cosmetics)")
+
+                for i, (_, o_n, o_p) in enumerate(e_overheads):
+                    parsed_p = parse_amount(o_p)
+                    clean_n = o_n.strip()
+                    if clean_n and parsed_p == 0:
+                        edit_missing_fields.append(f"Price for Expense '{clean_n}'")
+                    elif not clean_n and parsed_p > 0:
+                        edit_missing_fields.append(f"Name for Expense #{i+1}")
+
+                if edit_missing_fields:
+                    st.error(
+                        "⚠️ Cannot save changes with empty required fields:\n\n- "
+                        + "\n- ".join(edit_missing_fields)
+                    )
+                else:
+                    try:
+                        with st.spinner("Updating Google Sheet record..."):
+                            # Update Drugs Row
+                            if drugs_row_idx:
+                                sheet.update_cell(drugs_row_idx, 3, p_d_gross)
+                                sheet.update_cell(drugs_row_idx, 4, p_d_cash)
+                                sheet.update_cell(drugs_row_idx, 5, p_d_exp)
+                                sheet.update_cell(drugs_row_idx, 8, recalc_net)
+                                sheet.update_cell(drugs_row_idx, 9, edit_logger.strip())
+
+                            # Update Cosmetics Row
+                            if cosmetics_row_idx:
+                                sheet.update_cell(cosmetics_row_idx, 3, p_c_gross)
+                                sheet.update_cell(cosmetics_row_idx, 4, p_c_cash)
+                                sheet.update_cell(cosmetics_row_idx, 5, p_c_exp)
+
+                            # Update Overhead Rows
+                            for r_i, o_n, o_p in e_overheads:
+                                sheet.update_cell(r_i, 6, o_n.strip())
+                                sheet.update_cell(r_i, 7, parse_amount(o_p))
+
+                        st.success(f"Record for {selected_edit_date} updated successfully!")
+                        st.rerun()
+
+                    except Exception as update_err:
+                        st.error(f"Failed to update entry: {str(update_err)}")
