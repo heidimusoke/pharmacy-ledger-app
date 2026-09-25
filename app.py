@@ -120,8 +120,8 @@ def confirm_and_submit_dialog(
             hide_index=True,
         )
 
-    st.write(f"**Net Sale (Col E):** {net_sale:,} UGX")
-    st.write(f"**Expense Description / Final Net (Col H):** {total_expense_desc:,} UGX")
+    st.write(f"**Net Sale:** {net_sale:,} UGX")
+    st.write(f"**Final Net:** {total_expense_desc:,} UGX")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -149,7 +149,6 @@ def confirm_and_submit_dialog(
                     else:
                         exp_name, exp_price = "", ""
 
-                    # Columns A through I matching the sheet layout
                     manual_rows.append([
                         row_d,
                         cat,
@@ -388,7 +387,7 @@ with tab2:
     total_overheads = sum(p for _, p in parsed_overheads)
     final_net = net_sale - total_overheads
 
-    st.info(f"**Net Sale (Col E):** {net_sale:,} UGX | **Final Net (Col H):** {final_net:,} UGX")
+    st.info(f"**Net Sale:** {net_sale:,} UGX | **Final Net:** {final_net:,} UGX")
 
     if st.button("📌 Save Entry to Google Sheets", type="primary"):
         missing_fields = []
