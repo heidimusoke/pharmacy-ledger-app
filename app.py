@@ -14,7 +14,7 @@ st.set_page_config(
 st.title("📑 Pharmacy Ledger Inserter")
 st.write("Scan a ledger photo, manually enter daily records, or edit existing sheet entries.")
 
-# Fetch Gemini API Key from Streamlit Secrets (or fallback for local testing)
+# Fetch Gemini API Key from Streamlit Secrets
 GEMINI_API_KEY = st.secrets.get(
     "GEMINI_API_KEY",
     "AQ.Ab8RN6KhVtM3WvIqrMKVnT94EB2ZgmFG5KrvWXJ_WnlezYEh9Q",
@@ -97,13 +97,12 @@ def confirm_and_submit_dialog(
     formatted_date,
     logged_by,
     drugs_gross,
-    drugs_cash,
     drugs_expense,
     cosmetics_gross,
-    cosmetics_cash,
     cosmetics_expense,
     valid_overheads,
-    calculated_net_sale,
+    net_sale,
+    total_expense_desc,
 ):
     st.write("Please review the details before inserting into Google Sheets:")
 
@@ -117,13 +116,11 @@ def confirm_and_submit_dialog(
             {
                 "Category": "Drugs",
                 "Gross Sale": f"{drugs_gross:,}",
-                "Cash Sale": f"{drugs_cash:,}",
                 "Direct Expense": f"{drugs_expense:,}",
             },
             {
                 "Category": "Cosmetics",
                 "Gross Sale": f"{cosmetics_gross:,}",
-                "Cash Sale": f"{cosmetics_cash:,}",
                 "Direct Expense": f"{cosmetics_expense:,}",
             },
         ],
@@ -137,52 +134,45 @@ def confirm_and_submit_dialog(
             hide_index=True,
         )
 
-    st.write(f"**Net Sale:** {calculated_net_sale:,} UGX")
+    st.write(f"**Net Sale (Col E):** {net_sale:,} UGX")
+    st.write(f"**Total Expense / Final Net (Col H):** {total_expense_desc:,} UGX")
 
     col1, col2 = st.columns(2)
     with col1:
         if st.button("✅ Confirm & Insert", type="primary", use_container_width=True):
             try:
                 sheet = get_google_sheet()
-                max_rows = max(2, len(valid_overheads))
+                max_rows = max(2, len(valid_overheads), 4)
                 manual_rows = []
 
                 for i in range(max_rows):
                     row_d = formatted_date if i == 0 else ""
-                    row_net = calculated_net_sale if i == 0 else ""
+                    row_net = net_sale if i == 0 else ""
+                    row_desc = total_expense_desc if i == 0 else ""
                     row_log = logged_by.strip() if i == 0 else ""
 
                     if i == 0:
-                        cat, gross, cash, direct = (
-                            "Drugs",
-                            drugs_gross or "",
-                            drugs_cash or "",
-                            drugs_expense or "",
-                        )
+                        cat, gross, direct = "Drugs", drugs_gross or "", drugs_expense or ""
                     elif i == 1:
-                        cat, gross, cash, direct = (
-                            "Cosmetics",
-                            cosmetics_gross or "",
-                            cosmetics_cash or "",
-                            cosmetics_expense or "",
-                        )
+                        cat, gross, direct = "Cosmetics", cosmetics_gross or "", cosmetics_expense or ""
                     else:
-                        cat, gross, cash, direct = "", "", "", ""
+                        cat, gross, direct = "", "", ""
 
                     if i < len(valid_overheads):
                         exp_name, exp_price = valid_overheads[i]
                     else:
                         exp_name, exp_price = "", ""
 
+                    # Structure matching columns A through I
                     manual_rows.append([
                         row_d,
                         cat,
                         gross,
-                        cash,
                         direct,
+                        row_net,
                         exp_name,
                         exp_price,
-                        row_net,
+                        row_desc,
                         row_log,
                     ])
 
@@ -222,8 +212,7 @@ with tab1:
                     last_date = get_last_sheet_date(sheet)
 
                     date_context_str = (
-                        f"The last date recorded in the spreadsheet prior to this page was:"
-                        f" {last_date}."
+                        f"The last date recorded in the spreadsheet prior to this page was: {last_date}."
                         if last_date
                         else "No previous dates found in sheet."
                     )
@@ -235,7 +224,6 @@ with tab1:
                     CRITICAL NUMBER EXTRACTION INSTRUCTIONS:
                     - Take extra care reading digits (e.g., distinguish clearly between 0, 1, 6, 7, and 8).
                     - Do not omit zeros at the end of amounts (e.g., read 33000 as 33000, not 3300).
-                    - Look closely at every row and column in the handwritten ledger.
 
                     Extract EVERY daily entry shown in the image and return ONLY a valid JSON array matching this schema:
 
@@ -243,16 +231,18 @@ with tab1:
                       {{
                         "date": "D/M/YYYY",
                         "sales": [
-                          {{"category": "Drugs", "gross_sale": 416700, "cash_sale": 411100, "direct_expense": 5600}},
-                          {{"category": "Cosmetics", "gross_sale": 33500, "cash_sale": 33500, "direct_expense": 0}}
+                          {{"category": "Drugs", "gross_sale": 405900, "direct_expense": 397000}},
+                          {{"category": "Cosmetics", "gross_sale": 44000, "direct_expense": 44000}}
                         ],
-                        "net_sale": 356200,
+                        "net_sale": 8200,
                         "overhead_expenses": [
+                          {{"expense_name": "Airtime", "price": 1000}},
+                          {{"expense_name": "MOMO", "price": 30500}},
                           {{"expense_name": "Rent", "price": 33000}},
-                          {{"expense_name": "Momo", "price": 35000}},
-                          {{"expense_name": "Allow+AT", "price": 21000}}
+                          {{"expense_name": "Allowance", "price": 20000}}
                         ],
-                        "logged_by": ""
+                        "total_expense_desc": 365400,
+                        "logged_by": "Flavia"
                       }}
                     ]
 
@@ -301,20 +291,20 @@ with tab1:
                     for data in records:
                         sales = data.get("sales", [])
                         overheads = data.get("overhead_expenses", [])
-                        max_rows = max(len(sales), len(overheads), 2)
+                        max_rows = max(len(sales), len(overheads), 4)
 
                         for i in range(max_rows):
                             row_date = data.get("date", "") if i == 0 else ""
                             row_net_sale = data.get("net_sale", "") if i == 0 else ""
+                            row_desc = data.get("total_expense_desc", "") if i == 0 else ""
                             row_logged_by = data.get("logged_by", "") if i == 0 else ""
 
                             if i < len(sales):
                                 cat = sales[i].get("category", "")
                                 gross = sales[i].get("gross_sale", "")
-                                cash = sales[i].get("cash_sale", gross)
                                 direct = sales[i].get("direct_expense", "")
                             else:
-                                cat, gross, cash, direct = "", "", "", ""
+                                cat, gross, direct = "", "", ""
 
                             if i < len(overheads):
                                 overhead_name = overheads[i].get("expense_name", "")
@@ -326,11 +316,11 @@ with tab1:
                                 row_date,
                                 cat,
                                 gross,
-                                cash,
                                 direct,
+                                row_net_sale,
                                 overhead_name,
                                 overhead_price,
-                                row_net_sale,
+                                row_desc,
                                 row_logged_by,
                             ])
 
@@ -355,25 +345,21 @@ with tab2:
     with col_date:
         entry_date = st.date_input("Date", format="DD/MM/YYYY")
     with col_logger:
-        logged_by = st.text_input("Logged By", placeholder="e.g. FLAVIA")
+        logged_by = st.text_input("Logged By", placeholder="e.g. Flavia")
 
     st.markdown("---")
     st.write("💊 **Drugs**")
-    d_col1, d_col2, d_col3 = st.columns(3)
+    d_col1, d_col2 = st.columns(2)
     with d_col1:
         drugs_gross_raw = st.text_input("Drugs Gross Sale", value="0")
     with d_col2:
-        drugs_cash_raw = st.text_input("Drugs Cash Sale", value="0")
-    with d_col3:
         drugs_expense_raw = st.text_input("Drugs Direct Expense", value="0")
 
     st.write("💄 **Cosmetics**")
-    c_col1, c_col2, c_col3 = st.columns(3)
+    c_col1, c_col2 = st.columns(2)
     with c_col1:
         cosmetics_gross_raw = st.text_input("Cosmetics Gross Sale", value="0")
     with c_col2:
-        cosmetics_cash_raw = st.text_input("Cosmetics Cash Sale", value="0")
-    with c_col3:
         cosmetics_expense_raw = st.text_input("Cosmetics Direct Expense", value="0")
 
     st.markdown("---")
@@ -401,11 +387,9 @@ with tab2:
     st.markdown("---")
 
     drugs_gross = parse_amount(drugs_gross_raw)
-    drugs_cash = parse_amount(drugs_cash_raw)
     drugs_expense = parse_amount(drugs_expense_raw)
 
     cosmetics_gross = parse_amount(cosmetics_gross_raw)
-    cosmetics_cash = parse_amount(cosmetics_cash_raw)
     cosmetics_expense = parse_amount(cosmetics_expense_raw)
 
     parsed_overheads = [
@@ -414,10 +398,11 @@ with tab2:
 
     total_gross = drugs_gross + cosmetics_gross
     total_direct_exp = drugs_expense + cosmetics_expense
+    net_sale = total_gross - total_direct_exp
     total_overheads = sum(p for _, p in parsed_overheads)
-    calculated_net_sale = total_gross - total_direct_exp - total_overheads
+    final_net = net_sale - total_overheads
 
-    st.info(f"**Calculated Net Sale:** {calculated_net_sale:,} UGX")
+    st.info(f"**Net Sale (Col E):** {net_sale:,} UGX | **Final Net (Col H):** {final_net:,} UGX")
 
     if st.button("📌 Save Entry to Google Sheets", type="primary"):
         missing_fields = []
@@ -451,13 +436,12 @@ with tab2:
                 formatted_date=formatted_date,
                 logged_by=logged_by,
                 drugs_gross=drugs_gross,
-                drugs_cash=drugs_cash,
                 drugs_expense=drugs_expense,
                 cosmetics_gross=cosmetics_gross,
-                cosmetics_cash=cosmetics_cash,
                 cosmetics_expense=cosmetics_expense,
                 valid_overheads=valid_overheads,
-                calculated_net_sale=calculated_net_sale,
+                net_sale=net_sale,
+                total_expense_desc=final_net,
             )
 
 # ==========================================
@@ -487,6 +471,14 @@ with tab3:
                 if row and row[0].strip() == selected_edit_date:
                     target_indices.append(idx + 1)  # 1-based index for gspread
 
+            # Reset edit overhead count state when switching dates
+            if (
+                "last_selected_date" not in st.session_state
+                or st.session_state.last_selected_date != selected_edit_date
+            ):
+                st.session_state.last_selected_date = selected_edit_date
+                st.session_state.edit_overhead_extra = 0
+
             # Collect existing blocks for Drugs, Cosmetics, and Overheads
             drugs_row_idx = None
             cosmetics_row_idx = None
@@ -506,26 +498,34 @@ with tab3:
                 if exp_name or exp_price:
                     overhead_rows.append((r_idx, exp_name, exp_price))
 
-            # Fetch current values
+            # Fetch current Logger (Col I - index 8)
             edit_logged_by = ""
             if target_indices:
                 first_row = all_records[target_indices[0] - 1]
                 edit_logged_by = first_row[8] if len(first_row) > 8 else ""
 
-            edit_logger = st.text_input("Logged By", value=edit_logged_by, key="edit_logger")
+            edit_logger = st.text_input(
+                "Logged By", value=edit_logged_by, key=f"edit_logger_{selected_edit_date}"
+            )
 
             st.markdown("---")
             st.write("💊 **Drugs**")
             d_row = all_records[drugs_row_idx - 1] if drugs_row_idx else []
-            e_d_gross = st.text_input("Drugs Gross", value=d_row[2] if len(d_row) > 2 else "0", key="e_dg")
-            e_d_cash = st.text_input("Drugs Cash", value=d_row[3] if len(d_row) > 3 else "0", key="e_dc")
-            e_d_exp = st.text_input("Drugs Expense", value=d_row[4] if len(d_row) > 4 else "0", key="e_de")
+            e_d_gross = st.text_input(
+                "Drugs Gross", value=d_row[2] if len(d_row) > 2 else "0", key=f"e_dg_{selected_edit_date}"
+            )
+            e_d_exp = st.text_input(
+                "Drugs Direct Expense", value=d_row[3] if len(d_row) > 3 else "0", key=f"e_de_{selected_edit_date}"
+            )
 
             st.write("💄 **Cosmetics**")
             c_row = all_records[cosmetics_row_idx - 1] if cosmetics_row_idx else []
-            e_c_gross = st.text_input("Cosmetics Gross", value=c_row[2] if len(c_row) > 2 else "0", key="e_cg")
-            e_c_cash = st.text_input("Cosmetics Cash", value=c_row[3] if len(c_row) > 3 else "0", key="e_cc")
-            e_c_exp = st.text_input("Cosmetics Expense", value=c_row[4] if len(c_row) > 4 else "0", key="e_ce")
+            e_c_gross = st.text_input(
+                "Cosmetics Gross", value=c_row[2] if len(c_row) > 2 else "0", key=f"e_cg_{selected_edit_date}"
+            )
+            e_c_exp = st.text_input(
+                "Cosmetics Direct Expense", value=c_row[3] if len(c_row) > 3 else "0", key=f"e_ce_{selected_edit_date}"
+            )
 
             st.markdown("---")
             st.write("💸 **Overhead Expenses**")
@@ -534,28 +534,50 @@ with tab3:
             for i, (r_i, name, price) in enumerate(overhead_rows):
                 col_o1, col_o2 = st.columns(2)
                 with col_o1:
-                    o_n = st.text_input(f"Expense #{i+1} Name", value=name, key=f"e_on_{i}")
+                    o_n = st.text_input(
+                        f"Expense #{i+1} Name", value=name, key=f"e_on_{selected_edit_date}_{i}"
+                    )
                 with col_o2:
-                    o_p = st.text_input(f"Expense #{i+1} Price", value=price, key=f"e_op_{i}")
+                    o_p = st.text_input(
+                        f"Expense #{i+1} Price", value=price, key=f"e_op_{selected_edit_date}_{i}"
+                    )
                 e_overheads.append((r_i, o_n, o_p))
+
+            base_count = len(overhead_rows)
+            for j in range(st.session_state.edit_overhead_extra):
+                slot_num = base_count + j + 1
+                col_o1, col_o2 = st.columns(2)
+                with col_o1:
+                    o_n = st.text_input(
+                        f"Expense #{slot_num} Name", value="", key=f"e_on_extra_{selected_edit_date}_{j}"
+                    )
+                with col_o2:
+                    o_p = st.text_input(
+                        f"Expense #{slot_num} Price", value="0", key=f"e_op_extra_{selected_edit_date}_{j}"
+                    )
+                e_overheads.append((None, o_n, o_p))
+
+            col_add_edit_exp, _ = st.columns([1, 2])
+            with col_add_edit_exp:
+                if st.button("➕ Add Overhead Expense Slot", key="btn_add_edit_exp"):
+                    st.session_state.edit_overhead_extra += 1
+                    st.rerun()
 
             st.markdown("---")
 
             p_d_gross = parse_amount(e_d_gross)
-            p_d_cash = parse_amount(e_d_cash)
             p_d_exp = parse_amount(e_d_exp)
 
             p_c_gross = parse_amount(e_c_gross)
-            p_c_cash = parse_amount(e_c_cash)
             p_c_exp = parse_amount(e_c_exp)
 
             p_overheads_total = sum(parse_amount(p) for _, _, p in e_overheads)
-            recalc_net = (p_d_gross + p_c_gross) - (p_d_exp + p_c_exp) - p_overheads_total
+            recalc_net = (p_d_gross + p_c_gross) - (p_d_exp + p_c_exp)
+            recalc_final_net = recalc_net - p_overheads_total
 
-            st.info(f"**Updated Net Sale:** {recalc_net:,} UGX")
+            st.info(f"**Updated Net Sale (Col E):** {recalc_net:,} UGX | **Final Net (Col H):** {recalc_final_net:,} UGX")
 
             if st.button("✏️ Save Edits to Google Sheets", type="primary"):
-                # Validation checks for editing
                 edit_missing_fields = []
 
                 if not edit_logger.strip():
@@ -580,26 +602,39 @@ with tab3:
                 else:
                     try:
                         with st.spinner("Updating Google Sheet record..."):
-                            # Update Drugs Row
+                            # Update Drugs Row (Col C=3, Col D=4, Col E=5, Col H=8, Col I=9)
                             if drugs_row_idx:
                                 sheet.update_cell(drugs_row_idx, 3, p_d_gross)
-                                sheet.update_cell(drugs_row_idx, 4, p_d_cash)
-                                sheet.update_cell(drugs_row_idx, 5, p_d_exp)
-                                sheet.update_cell(drugs_row_idx, 8, recalc_net)
+                                sheet.update_cell(drugs_row_idx, 4, p_d_exp)
+                                sheet.update_cell(drugs_row_idx, 5, recalc_net)
+                                sheet.update_cell(drugs_row_idx, 8, recalc_final_net)
                                 sheet.update_cell(drugs_row_idx, 9, edit_logger.strip())
 
-                            # Update Cosmetics Row
+                            # Update Cosmetics Row (Col C=3, Col D=4)
                             if cosmetics_row_idx:
                                 sheet.update_cell(cosmetics_row_idx, 3, p_c_gross)
-                                sheet.update_cell(cosmetics_row_idx, 4, p_c_cash)
-                                sheet.update_cell(cosmetics_row_idx, 5, p_c_exp)
+                                sheet.update_cell(cosmetics_row_idx, 4, p_c_exp)
 
-                            # Update Overhead Rows
+                            # Handle existing overhead updates & new overhead additions
+                            new_rows_to_add = []
                             for r_i, o_n, o_p in e_overheads:
-                                sheet.update_cell(r_i, 6, o_n.strip())
-                                sheet.update_cell(r_i, 7, parse_amount(o_p))
+                                clean_n = o_n.strip()
+                                parsed_p = parse_amount(o_p)
+
+                                if r_i is not None:
+                                    sheet.update_cell(r_i, 6, clean_n)
+                                    sheet.update_cell(r_i, 7, parsed_p if (clean_n or parsed_p > 0) else "")
+                                else:
+                                    if clean_n or parsed_p > 0:
+                                        new_rows_to_add.append([
+                                            "", "", "", "", "", clean_n, parsed_p, "", ""
+                                        ])
+
+                            if new_rows_to_add:
+                                sheet.append_rows(new_rows_to_add, value_input_option="USER_ENTERED")
 
                         st.success(f"Record for {selected_edit_date} updated successfully!")
+                        st.session_state.edit_overhead_extra = 0
                         st.rerun()
 
                     except Exception as update_err:
