@@ -71,6 +71,113 @@ def preprocess_image(pil_img):
     return img
 
 
+# Confirmation Modal Dialog
+@st.dialog("Confirm Data Submission")
+def confirm_and_submit_dialog(
+    formatted_date,
+    logged_by,
+    drugs_gross,
+    drugs_cash,
+    drugs_expense,
+    cosmetics_gross,
+    cosmetics_cash,
+    cosmetics_expense,
+    valid_overheads,
+    calculated_net_sale,
+):
+    st.write("Please review the details before inserting into Google Sheets:")
+
+    st.markdown(f"**Date:** {formatted_date}")
+    st.markdown(f"**Logged By:** {logged_by or 'N/A'}")
+
+    st.markdown("---")
+    st.markdown("**Sales Summary:**")
+    st.dataframe(
+        [
+            {
+                "Category": "Drugs",
+                "Gross Sale": f"{drugs_gross:,}",
+                "Cash Sale": f"{drugs_cash:,}",
+                "Direct Expense": f"{drugs_expense:,}",
+            },
+            {
+                "Category": "Cosmetics",
+                "Gross Sale": f"{cosmetics_gross:,}",
+                "Cash Sale": f"{cosmetics_cash:,}",
+                "Direct Expense": f"{cosmetics_expense:,}",
+            },
+        ],
+        hide_index=True,
+    )
+
+    if valid_overheads:
+        st.markdown("**Overhead Expenses:**")
+        st.dataframe(
+            [{"Expense Name": name, "Price": f"{price:,}"} for name, price in valid_overheads],
+            hide_index=True,
+        )
+
+    st.markdown(f"### **Net Sale:** {calculated_net_sale:,} UGX")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("✅ Confirm & Insert", type="primary", use_container_width=True):
+            try:
+                sheet = get_google_sheet()
+                max_rows = max(2, len(valid_overheads))
+                manual_rows = []
+
+                for i in range(max_rows):
+                    row_d = formatted_date if i == 0 else ""
+                    row_net = calculated_net_sale if i == 0 else ""
+                    row_log = logged_by.strip() if i == 0 else ""
+
+                    if i == 0:
+                        cat, gross, cash, direct = (
+                            "Drugs",
+                            drugs_gross or "",
+                            drugs_cash or "",
+                            drugs_expense or "",
+                        )
+                    elif i == 1:
+                        cat, gross, cash, direct = (
+                            "Cosmetics",
+                            cosmetics_gross or "",
+                            cosmetics_cash or "",
+                            cosmetics_expense or "",
+                        )
+                    else:
+                        cat, gross, cash, direct = "", "", "", ""
+
+                    if i < len(valid_overheads):
+                        exp_name, exp_price = valid_overheads[i]
+                    else:
+                        exp_name, exp_price = "", ""
+
+                    manual_rows.append([
+                        row_d,
+                        cat,
+                        gross,
+                        cash,
+                        direct,
+                        exp_name,
+                        exp_price,
+                        row_net,
+                        row_log,
+                    ])
+
+                sheet.append_rows(manual_rows, value_input_option="USER_ENTERED")
+                st.success(f"Successfully added manual record for {formatted_date}!")
+                st.rerun()
+
+            except Exception as err:
+                st.error(f"Error submitting manual entry: {str(err)}")
+
+    with col2:
+        if st.button("❌ Cancel", use_container_width=True):
+            st.rerun()
+
+
 # Navigation Tabs
 tab1, tab2 = st.tabs(["📷 Upload & Scan", "✍️ Manual Entry"])
 
@@ -125,7 +232,7 @@ with tab1:
                           {{"expense_name": "Momo", "price": 35000}},
                           {{"expense_name": "Allow+AT", "price": 21000}}
                         ],
-                        "logged_by": "FLAVIA"
+                        "logged_by": ""
                       }}
                     ]
 
@@ -204,7 +311,7 @@ with tab1:
                                 overhead_name,
                                 overhead_price,
                                 row_net_sale,
-                                row_logged_by
+                                row_logged_by,
                             ])
 
                     sheet.append_rows(rows_to_append, value_input_option="USER_ENTERED")
@@ -221,109 +328,84 @@ with tab1:
 with tab2:
     st.subheader("Manual Ledger Entry")
 
-    with st.form("manual_ledger_form", clear_on_submit=False):
-        col_date, col_logger = st.columns(2)
-        with col_date:
-            entry_date = st.date_input("Date", format="DD/MM/YYYY")
-        with col_logger:
-            logged_by = st.text_input("Logged By", value="FLAVIA")
+    # Initialize session state for dynamic overhead expense fields
+    if "expense_count" not in st.session_state:
+        st.session_state.expense_count = 1
 
-        st.markdown("---")
-        st.markdown("##### 💊 Drugs")
-        d_col1, d_col2, d_col3 = st.columns(3)
-        with d_col1:
-            drugs_gross = st.number_input("Drugs Gross Sale", min_value=0, value=0, step=500)
-        with d_col2:
-            drugs_cash = st.number_input("Drugs Cash Sale", min_value=0, value=0, step=500)
-        with d_col3:
-            drugs_expense = st.number_input("Drugs Direct Expense", min_value=0, value=0, step=500)
+    col_date, col_logger = st.columns(2)
+    with col_date:
+        entry_date = st.date_input("Date", format="DD/MM/YYYY")
+    with col_logger:
+        logged_by = st.text_input("Logged By", placeholder="e.g. FLAVIA")
 
-        st.markdown("##### 💄 Cosmetics")
-        c_col1, c_col2, c_col3 = st.columns(3)
-        with c_col1:
-            cosmetics_gross = st.number_input("Cosmetics Gross Sale", min_value=0, value=0, step=500)
-        with c_col2:
-            cosmetics_cash = st.number_input("Cosmetics Cash Sale", min_value=0, value=0, step=500)
-        with c_col3:
-            cosmetics_expense = st.number_input("Cosmetics Direct Expense", min_value=0, value=0, step=500)
+    st.markdown("---")
+    st.markdown("##### 💊 Drugs")
+    d_col1, d_col2, d_col3 = st.columns(3)
+    with d_col1:
+        drugs_gross = st.number_input("Drugs Gross Sale", min_value=0, value=0, step=None)
+    with d_col2:
+        drugs_cash = st.number_input("Drugs Cash Sale", min_value=0, value=0, step=None)
+    with d_col3:
+        drugs_expense = st.number_input("Drugs Direct Expense", min_value=0, value=0, step=None)
 
-        st.markdown("---")
-        st.markdown("##### 💸 Overhead Expenses")
+    st.markdown("##### 💄 Cosmetics")
+    c_col1, c_col2, c_col3 = st.columns(3)
+    with c_col1:
+        cosmetics_gross = st.number_input("Cosmetics Gross Sale", min_value=0, value=0, step=None)
+    with c_col2:
+        cosmetics_cash = st.number_input("Cosmetics Cash Sale", min_value=0, value=0, step=None)
+    with c_col3:
+        cosmetics_expense = st.number_input("Cosmetics Direct Expense", min_value=0, value=0, step=None)
 
-        e1_col1, e1_col2 = st.columns(2)
-        with e1_col1:
-            exp1_name = st.text_input("Expense 1 Name", placeholder="e.g. Rent")
-        with e1_col2:
-            exp1_price = st.number_input("Expense 1 Price", min_value=0, value=0, step=500)
+    st.markdown("---")
+    st.markdown("##### 💸 Overhead Expenses")
 
-        e2_col1, e2_col2 = st.columns(2)
-        with e2_col1:
-            exp2_name = st.text_input("Expense 2 Name", placeholder="e.g. Momo")
-        with e2_col2:
-            exp2_price = st.number_input("Expense 2 Price", min_value=0, value=0, step=500)
+    overheads_list = []
+    for idx in range(st.session_state.expense_count):
+        e_col1, e_col2 = st.columns(2)
+        with e_col1:
+            exp_name = st.text_input(
+                f"Expense {idx+1} Name", key=f"exp_name_{idx}", placeholder="e.g. Rent"
+            )
+        with e_col2:
+            exp_price = st.number_input(
+                f"Expense {idx+1} Price", key=f"exp_price_{idx}", min_value=0, value=0, step=None
+            )
+        overheads_list.append((exp_name, exp_price))
 
-        e3_col1, e3_col2 = st.columns(2)
-        with e3_col1:
-            exp3_name = st.text_input("Expense 3 Name", placeholder="e.g. Allow+AT")
-        with e3_col2:
-            exp3_price = st.number_input("Expense 3 Price", min_value=0, value=0, step=500)
+    col_add_exp, _ = st.columns([1, 2])
+    with col_add_exp:
+        if st.button("➕ Add Extra Expense Slot"):
+            st.session_state.expense_count += 1
+            st.rerun()
 
-        st.markdown("---")
+    st.markdown("---")
 
-        # Auto-calculate Net Sale
-        total_gross = drugs_gross + cosmetics_gross
-        total_direct_exp = drugs_expense + cosmetics_expense
-        total_overheads = exp1_price + exp2_price + exp3_price
-        calculated_net_sale = total_gross - total_direct_exp - total_overheads
+    # Calculate Totals & Net Sale
+    total_gross = drugs_gross + cosmetics_gross
+    total_direct_exp = drugs_expense + cosmetics_expense
+    total_overheads = sum(p for _, p in overheads_list)
+    calculated_net_sale = total_gross - total_direct_exp - total_overheads
 
-        st.info(f"**Calculated Net Sale:** {calculated_net_sale:,} UGX")
+    st.info(f"**Calculated Net Sale:** {calculated_net_sale:,} UGX")
 
-        submit_manual = st.form_submit_button("📌 Save Entry to Google Sheets", type="primary")
+    if st.button("📌 Save Entry to Google Sheets", type="primary"):
+        formatted_date = entry_date.strftime("%d/%m/%Y").lstrip("0").replace("/0", "/")
+        valid_overheads = [
+            (name.strip(), price if price > 0 else "")
+            for name, price in overheads_list
+            if name.strip() or price > 0
+        ]
 
-    if submit_manual:
-        try:
-            sheet = get_google_sheet()
-            formatted_date = entry_date.strftime("%d/%m/%Y").lstrip("0").replace("/0", "/")
-
-            overheads_input = []
-            for name, price in [(exp1_name, exp1_price), (exp2_name, exp2_price), (exp3_name, exp3_price)]:
-                if name.strip() or price > 0:
-                    overheads_input.append((name.strip(), price if price > 0 else ""))
-
-            max_rows = max(2, len(overheads_input))
-            manual_rows = []
-
-            for i in range(max_rows):
-                row_d = formatted_date if i == 0 else ""
-                row_net = calculated_net_sale if i == 0 else ""
-                row_log = logged_by.strip() if i == 0 else ""
-
-                if i == 0:
-                    cat, gross, cash, direct = "Drugs", drugs_gross or "", drugs_cash or "", drugs_expense or ""
-                elif i == 1:
-                    cat, gross, cash, direct = "Cosmetics", cosmetics_gross or "", cosmetics_cash or "", cosmetics_expense or ""
-                else:
-                    cat, gross, cash, direct = "", "", "", ""
-
-                if i < len(overheads_input):
-                    exp_name, exp_price = overheads_input[i]
-                else:
-                    exp_name, exp_price = "", ""
-
-                manual_rows.append([
-                    row_d,
-                    cat,
-                    gross,
-                    cash,
-                    direct,
-                    exp_name,
-                    exp_price,
-                    row_net,
-                    row_log
-                ])
-
-            sheet.append_rows(manual_rows, value_input_option="USER_ENTERED")
-            st.success(f"Successfully added manual record for {formatted_date}!")
-
-        except Exception as err:
-            st.error(f"Error submitting manual entry: {str(err)}")
+        confirm_and_submit_dialog(
+            formatted_date=formatted_date,
+            logged_by=logged_by,
+            drugs_gross=drugs_gross,
+            drugs_cash=drugs_cash,
+            drugs_expense=drugs_expense,
+            cosmetics_gross=cosmetics_gross,
+            cosmetics_cash=cosmetics_cash,
+            cosmetics_expense=cosmetics_expense,
+            valid_overheads=valid_overheads,
+            calculated_net_sale=calculated_net_sale,
+        )
