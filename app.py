@@ -5,7 +5,7 @@ from google.genai import types
 import gspread
 from PIL import Image, ImageOps
 import streamlit as st
-from streamlit_img_cropper import st_cropper
+from streamlit_image_cropper import st_cropper
 
 # Page Configuration
 st.set_page_config(
