@@ -5,6 +5,7 @@ from google.genai import types
 import gspread
 from PIL import Image, ImageOps
 import streamlit as st
+from streamlit_cropper import st_cropper
 
 # Page Configuration
 st.set_page_config(
@@ -12,7 +13,7 @@ st.set_page_config(
 )
 
 st.title("📑 Pharmacy Ledger Inserter")
-st.write("Scan a ledger photo or manually enter daily pharmacy records directly into Google Sheets.")
+st.write("Upload a ledger photo or manually enter daily pharmacy records directly into Google Sheets.")
 
 # Fetch Gemini API Key from Streamlit Secrets
 GEMINI_API_KEY = st.secrets.get(
@@ -174,25 +175,35 @@ def confirm_and_submit_dialog(
 
 
 # Navigation Tabs
-tab1, tab2 = st.tabs(["📷 Upload & Scan", "✍️ Manual Entry"])
+tab1, tab2 = st.tabs(["🖼️ Upload Image", "✍️ Manual Entry"])
 
 # ==========================================
-# TAB 1: UPLOAD & SCAN VIA GEMINI
+# TAB 1: UPLOAD & CROP IMAGE VIA GEMINI
 # ==========================================
 with tab1:
     uploaded_file = st.file_uploader(
-        "Select ledger photo from Gallery or Camera",
+        "Select ledger photo",
         type=["jpg", "jpeg", "png"],
     )
 
     if uploaded_file is not None:
         raw_image = Image.open(uploaded_file)
-        st.image(raw_image, caption="Uploaded Image", use_container_width=True)
+        
+        st.write("📐 **Adjust box to crop image before processing:**")
+        cropped_image = st_cropper(
+            raw_image,
+            realtime_update=True,
+            box_color="#00FF00",
+            aspect_ratio=None,
+        )
+
+        st.write("🔍 **Cropped Preview:**")
+        st.image(cropped_image, use_container_width=True)
 
         if st.button("🚀 Process & Append to Google Sheets", type="primary"):
             with st.spinner("Analyzing handwritten ledger entries..."):
                 try:
-                    ledger_img = preprocess_image(raw_image)
+                    ledger_img = preprocess_image(cropped_image)
                     sheet = get_google_sheet()
                     last_date = get_last_sheet_date(sheet)
 
