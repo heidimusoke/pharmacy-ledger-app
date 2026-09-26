@@ -5,7 +5,6 @@ from google.genai import types
 import gspread
 from PIL import Image, ImageOps
 import streamlit as st
-from streamlit_cropper import st_cropper
 
 # Page Configuration
 st.set_page_config(
@@ -178,7 +177,7 @@ def confirm_and_submit_dialog(
 tab1, tab2 = st.tabs(["🖼️ Upload Image", "✍️ Manual Entry"])
 
 # ==========================================
-# TAB 1: UPLOAD & CROP IMAGE VIA GEMINI
+# TAB 1: UPLOAD & PROCESS IMAGE VIA GEMINI
 # ==========================================
 with tab1:
     uploaded_file = st.file_uploader(
@@ -188,24 +187,12 @@ with tab1:
 
     if uploaded_file is not None:
         raw_image = Image.open(uploaded_file)
-        
-        st.write("📐 **Drag corners or edges to crop image before processing:**")
-        cropped_image = st_cropper(
-            raw_image,
-            realtime_update=True,
-            box_color="#00FF00",
-            aspect_ratio=None,  # Freeform cropping
-        )
-
-        st.write("🔍 **Cropped Preview:**")
-        st.image(cropped_image, use_container_width=True)
+        st.image(raw_image, caption="Uploaded Image", use_container_width=True)
 
         if st.button("🚀 Process & Append to Google Sheets", type="primary"):
-            target_image = cropped_image if cropped_image is not None else raw_image
-
             with st.spinner("Analyzing handwritten ledger entries..."):
                 try:
-                    ledger_img = preprocess_image(target_image)
+                    ledger_img = preprocess_image(raw_image)
                     sheet = get_google_sheet()
                     last_date = get_last_sheet_date(sheet)
 
@@ -217,6 +204,7 @@ with tab1:
 
                     prompt = f"""
                     Analyze this handwritten pharmacy logbook image with high accuracy.
+                    Focus strictly on the written ledger table/grid and ignore any surrounding background surfaces.
                     {date_context_str}
 
                     CRITICAL NUMBER EXTRACTION INSTRUCTIONS:
