@@ -5,7 +5,7 @@ from google.genai import types
 import gspread
 from PIL import Image, ImageOps
 import streamlit as st
-from streamlit_image_cropper import st_cropper
+from streamlit_cropper import st_cropper
 
 # Page Configuration
 st.set_page_config(
@@ -189,21 +189,23 @@ with tab1:
     if uploaded_file is not None:
         raw_image = Image.open(uploaded_file)
         
-        st.write("📐 **Adjust box to crop image before processing:**")
+        st.write("📐 **Drag corners or edges to crop image before processing:**")
         cropped_image = st_cropper(
             raw_image,
             realtime_update=True,
             box_color="#00FF00",
-            aspect_ratio=None,
+            aspect_ratio=None,  # Freeform cropping
         )
 
         st.write("🔍 **Cropped Preview:**")
         st.image(cropped_image, use_container_width=True)
 
         if st.button("🚀 Process & Append to Google Sheets", type="primary"):
+            target_image = cropped_image if cropped_image is not None else raw_image
+
             with st.spinner("Analyzing handwritten ledger entries..."):
                 try:
-                    ledger_img = preprocess_image(cropped_image)
+                    ledger_img = preprocess_image(target_image)
                     sheet = get_google_sheet()
                     last_date = get_last_sheet_date(sheet)
 

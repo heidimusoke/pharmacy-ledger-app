@@ -2,4 +2,4 @@ streamlit
 google-genai
 gspread>=6.0.0
 Pillow
-streamlit-image-cropper
+streamlit-cropper
